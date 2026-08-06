@@ -1,0 +1,17 @@
+{
+  "name": "ci-status",
+  "author": "lumine-code",
+  "description": "Run every lumine-code package's specs at master against a real editor build.",
+  "repository": "https://github.com/lumine-code/ci-status",
+  "bugs": {
+    "url": "https://github.com/lumine-code/ci-status/issues"
+  },
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "plan-specs": "node scripts/plan-specs.js",
+    "run-specs": "node scripts/run-specs.js",
+    "summarize-specs": "node scripts/summarize-specs.js"
+  }
+}

@@ -1,0 +1,9 @@
+.dev
+node_modules/
+
+# Sweep working files: the resolved plan, the shard results, and the editor
+# build a local run unpacks beside them.
+plan.json
+results/
+lumine/
+lumine-editor.tar.*
