@@ -34,6 +34,21 @@ The sweep runs on every push here, once a day, and on demand from the Actions ta
 be narrowed to a few packages, fewer platforms, a different editor build, or a different package
 branch.
 
+The daily run belongs to `Stamp and sweep` rather than to the sweep itself. It writes the time into
+`last.log`, commits it, and then dispatches the sweep, so each sweep reports on a commit no other
+run has touched.
+
+That indirection buys an honest badge. GitHub reports a repository's status as the aggregate of
+every check suite on its HEAD, not the newest one, so wherever HEAD sits still the status only
+ratchets: one red sweep pins the badge red however many green ones follow it, and nothing is coming
+along to clear it. Moving HEAD once per sweep gives each result a commit of its own, so the badge
+means the last sweep.
+
+The order is the point. Stamping afterwards would leave the result on the previous commit and the
+new one with no status at all. The dispatch is not a convenience either — a push made with
+`GITHUB_TOKEN` deliberately does not trigger workflows, so the stamp commit has to ask for the
+sweep rather than cause it.
+
 The same three steps run locally against a checkout of the editor:
 
 ```

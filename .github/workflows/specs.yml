@@ -40,11 +40,10 @@ on:
         description: The branch of each package to sweep.
         required: false
         default: master
-  schedule:
-    # Daily. Nothing in this repository changes between runs — the fleet it
-    # reports on does, so the scheduled sweep is the point rather than a
-    # backstop.
-    - cron: "0 3 * * *"
+  # Deliberately not scheduled here. `Stamp and sweep` owns the daily run: it
+  # commits `last.log` first so this sweep reports on a commit of its own, and
+  # then dispatches it. Scheduling here as well would sweep twice a day and put
+  # the second result on a commit the first had already claimed.
 
 permissions:
   contents: read

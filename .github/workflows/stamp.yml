@@ -1,0 +1,51 @@
+name: Stamp and sweep
+
+# Give each sweep a commit of its own, then start it.
+#
+# GitHub reports a repository's status as the aggregate of every check suite on
+# its HEAD, not the newest one, so where HEAD never moves the status only
+# ratchets: one red sweep pins the badge red however many green ones follow.
+# Nothing in this repository changes between runs, so nothing would ever move
+# HEAD on its own — hence stamping `last.log` before each sweep, so the sweep
+# reports on a commit no other run has touched.
+#
+# The dispatch at the end is not a convenience. A push made with GITHUB_TOKEN
+# deliberately does not trigger workflows, so the stamp commit cannot start the
+# sweep by itself; it has to ask.
+
+on:
+  schedule:
+    # Daily, a few minutes ahead of where the sweep itself used to sit.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  stamp:
+    name: Stamp last.log
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Stamp and commit
+        id: stamp
+        run: node scripts/stamp.js
+      # Dispatched rather than left to the push above, which GITHUB_TOKEN
+      # cannot use to trigger anything. `--ref master` resolves to the commit
+      # just pushed, so the sweep's check suite lands on it.
+      - name: Start the sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run specs.yml --repo "$GITHUB_REPOSITORY" --ref master
+          echo "Swept commit: ${{ steps.stamp.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
