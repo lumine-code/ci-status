@@ -15,9 +15,9 @@ name: Stamp and sweep
 
 on:
   schedule:
-    # Twice a day, twelve hours apart. Each firing stamps a fresh commit and
-    # sweeps it, so the badge is never more than half a day behind the fleet.
-    - cron: "0 3,15 * * *"
+    # Daily. Each firing stamps a fresh commit and sweeps it, so the badge is
+    # never more than a day behind the fleet.
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
