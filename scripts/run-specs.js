@@ -160,9 +160,10 @@ function checkout(entry, directory) {
   ]);
 }
 
-// `--ignore-scripts` matches how every package's own CI installs itself: these
-// are editor packages, so nothing they depend on needs a build step, and the
-// native modules the specs touch belong to the editor and are already built.
+// `--ignore-scripts` matches how every package's own CI installs itself, and
+// keeps a hundred repositories' install hooks from running on the runner.
+// Anything native it skips is rebuilt below, deliberately rather than by
+// whatever the dependency's own install script would have done.
 function install(directory) {
   const lockfile = fs.existsSync(path.join(directory, "package-lock.json"));
   const args = lockfile
@@ -171,6 +172,61 @@ function install(directory) {
   const result = shell(`npm ${args}`, directory);
   if (result.code === 0) return result;
   return { ...result, message: result.message || `npm ${args.split(" ")[0]} failed` };
+}
+
+// A `binding.gyp` is what marks a dependency as node-gyp native. Scoped
+// packages nest one level deeper, so look through both shapes.
+function findNativeModules(directory) {
+  const root = path.join(directory, "node_modules");
+  if (!fs.existsSync(root)) return [];
+  const found = [];
+  const consider = (candidate) => {
+    if (fs.existsSync(path.join(candidate, "binding.gyp"))) found.push(candidate);
+  };
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const target = path.join(root, entry.name);
+    if (entry.name.startsWith("@")) {
+      for (const scoped of fs.readdirSync(target, { withFileTypes: true })) {
+        if (scoped.isDirectory()) consider(path.join(target, scoped.name));
+      }
+    } else {
+      consider(target);
+    }
+  }
+  return found;
+}
+
+// The specs run inside the editor, so a package's own native dependency has to
+// match Electron's ABI rather than Node's — dropping `--ignore-scripts` would
+// build it against Node and it would fail to load with a NODE_MODULE_VERSION
+// mismatch instead. Rebuild with the editor's own electron-rebuild, at the
+// editor's Electron version: the same step the editor runs over its own tree.
+function rebuildNativeModules(directory, editorDirectory) {
+  const native = findNativeModules(directory);
+  if (native.length === 0) return { code: 0 };
+
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(editorDirectory, "package.json"), "utf8"),
+  );
+  const version = manifest.electronVersion;
+  if (!version) return { code: 1, message: "the editor declares no electronVersion" };
+
+  const binary = path.join(editorDirectory, "node_modules", ".bin", "electron-rebuild");
+  if (!fs.existsSync(binary)) {
+    return { code: 1, message: "the editor has no electron-rebuild to build against" };
+  }
+
+  const names = native.map((entry) => path.basename(entry)).join(", ");
+  process.stdout.write(`Rebuilding for Electron ${version}: ${names}\n`);
+  const result = shell(
+    `${quote(binary)} --version ${quote(version)} --module-dir ${quote(directory)} --force`,
+    directory,
+  );
+  if (result.code !== 0) {
+    return { ...result, message: result.message || `electron-rebuild failed for ${names}` };
+  }
+  return { code: 0 };
 }
 
 function runSpecs(specDirectory, editorDirectory, options, environment) {
@@ -245,6 +301,13 @@ function main() {
       if (installed.code !== 0) {
         record.status = "error";
         record.message = `install failed: ${installed.message}`;
+        return;
+      }
+
+      const rebuilt = rebuildNativeModules(directory, editorDirectory);
+      if (rebuilt.code !== 0) {
+        record.status = "error";
+        record.message = `native rebuild failed: ${rebuilt.message}`;
         return;
       }
 
