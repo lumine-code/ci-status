@@ -10,6 +10,7 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "spec": "node scripts/spec.js",
     "stamp": "node scripts/stamp.js",
     "plan-specs": "node scripts/plan-specs.js",
     "run-specs": "node scripts/run-specs.js",

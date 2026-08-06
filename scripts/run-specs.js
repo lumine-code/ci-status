@@ -67,11 +67,37 @@ function run(command, args, cwd, env) {
   return { code: 0 };
 }
 
+// Every runner has bash on PATH, but a local Windows run does not: `npm run`
+// goes through cmd, which knows nothing of Git's bash. Fall back to where Git
+// for Windows installs it, so the same command works from PowerShell, cmd and
+// a POSIX shell alike.
+let resolvedBash = null;
+function bash() {
+  if (resolvedBash) return resolvedBash;
+  const candidates = ["bash"];
+  if (process.platform === "win32") {
+    for (const base of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.ProgramW6432]) {
+      if (base) candidates.push(path.join(base, "Git", "bin", "bash.exe"));
+    }
+  }
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ["-c", "exit 0"]);
+    if (!probe.error && probe.status === 0) {
+      resolvedBash = candidate;
+      return resolvedBash;
+    }
+  }
+  throw new Error(
+    "No bash found. The sweep drives npm and the spec timeout through it; " +
+      "on Windows, install Git for Windows or run from a shell that has bash on PATH.",
+  );
+}
+
 // npm is a `.cmd` shim on Windows, which Node refuses to spawn directly, and
 // the spec run wants a `timeout` guard in front of it. Both are simplest
-// through a shell, and every runner this workflow uses has bash.
+// through a shell.
 function shell(command, cwd, env) {
-  const result = spawnSync("bash", ["-c", command], {
+  const result = spawnSync(bash(), ["-c", command], {
     cwd,
     env: env || process.env,
     stdio: "inherit",
@@ -86,7 +112,7 @@ function capture(command, args, cwd) {
 }
 
 function has(command) {
-  return spawnSync("bash", ["-c", `command -v ${command} >/dev/null 2>&1`]).status === 0;
+  return spawnSync(bash(), ["-c", `command -v ${command} >/dev/null 2>&1`]).status === 0;
 }
 
 function quote(value) {

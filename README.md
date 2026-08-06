@@ -49,7 +49,17 @@ new one with no status at all. The dispatch is not a convenience either — a pu
 `GITHUB_TOKEN` deliberately does not trigger workflows, so the stamp commit has to ask for the
 sweep rather than cause it.
 
-The same three steps run locally against a checkout of the editor:
+The whole sweep runs locally in one command, against the editor checkout the flat workspace already
+provides at `../lumine`:
+
+```
+npm run spec -- --only "linter marker-*"
+```
+
+It plans, runs every shard in turn, and summarizes, failing the way CI would. Pass `--editor` to
+point at a different checkout, `--shards` to split the work, `--ref` to sweep a branch other than
+`master`, and `--help` for the rest. The three steps are still separate scripts underneath, because
+CI runs them on separate machines:
 
 ```
 node scripts/plan-specs.js --only "linter marker-*" --shards 1
@@ -58,7 +68,13 @@ node scripts/summarize-specs.js --results results --plan plan.json
 ```
 
 Discovery lists the organization through the GitHub API, so set `GITHUB_TOKEN` for a local run;
-everything after that reads manifests and refs directly and costs no API quota.
+everything after that reads manifests and refs directly and costs no API quota. The sweep drives npm
+and the spec timeout through `bash`, which every runner has and Windows does not — a local Windows
+run falls back to the one Git for Windows installs.
+
+`npm run stamp` does by hand what the scheduled workflow does: writes the time into `last.log`,
+commits it, and pushes. The sweep does not follow on its own, since a push made with `GITHUB_TOKEN`
+triggers nothing; run it from the Actions tab, or push any other commit.
 
 ## Contributing
 
