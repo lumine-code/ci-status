@@ -41,9 +41,12 @@ on:
         required: false
         default: master
   # Deliberately not scheduled here. `Stamp and sweep` owns the daily run: it
-  # commits `last.log` first so this sweep reports on a commit of its own, and
-  # then dispatches it. Scheduling here as well would sweep twice a day and put
-  # the second result on a commit the first had already claimed.
+  # commits `last.log` first, and that push is what starts this sweep, so the
+  # result lands on a commit of its own. Scheduling here as well would sweep
+  # twice a day and put the second result on a commit the first had already
+  # claimed — and worse, it would report nothing on that commit either way,
+  # since GitHub keeps a suite raised by `schedule` out of the status rollup
+  # the commit displays. Only the `push` above puts a result on a commit.
 
 permissions:
   contents: read

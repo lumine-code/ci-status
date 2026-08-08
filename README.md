@@ -35,8 +35,8 @@ be narrowed to a few packages, fewer platforms, a different editor build, or a d
 branch.
 
 The daily run belongs to `Stamp and sweep` rather than to the sweep itself. It writes the time into
-`last.log`, commits it, and then dispatches the sweep, so each sweep reports on a commit no other
-run has touched.
+`last.log` and commits it, and that push is what starts the sweep, so each sweep reports on a commit
+no other run has touched.
 
 That indirection buys an honest badge. GitHub reports a repository's status as the aggregate of
 every check suite on its HEAD, not the newest one, so wherever HEAD sits still the status only
@@ -45,9 +45,15 @@ along to clear it. Moving HEAD once per sweep gives each result a commit of its 
 means the last sweep.
 
 The order is the point. Stamping afterwards would leave the result on the previous commit and the
-new one with no status at all. The dispatch is not a convenience either — a push made with
-`GITHUB_TOKEN` deliberately does not trigger workflows, so the stamp commit has to ask for the
-sweep rather than cause it.
+new one with no status at all.
+
+The stamp pushes with a `STAMP_TOKEN` secret — a fine-grained token holding `contents: write` on
+this repository — because a push made with `GITHUB_TOKEN` deliberately triggers no workflow.
+Dispatching the sweep instead is not a substitute, which is subtler and was worth learning once:
+GitHub assembles the status a commit displays only from the check suites a `push` raised, and drops
+the ones raised by `workflow_dispatch` and `schedule`. A dispatched sweep is attached to the stamp
+commit in the Actions tab and absent from the commit itself, which leaves the stamp carrying nothing
+and the badge reading no state at all — a worse failure than the ratchet stamping exists to fix.
 
 The whole sweep runs locally in one command, against the editor checkout the flat workspace already
 provides at `../lumine`:
@@ -73,8 +79,8 @@ and the spec timeout through `bash`, which every runner has and Windows does not
 run falls back to the one Git for Windows installs.
 
 `npm run stamp` does by hand what the scheduled workflow does: writes the time into `last.log`,
-commits it, and pushes. The sweep does not follow on its own, since a push made with `GITHUB_TOKEN`
-triggers nothing; run it from the Actions tab, or push any other commit.
+commits it, and pushes. Pushed with your own credentials rather than `GITHUB_TOKEN`, it starts the
+sweep the same way the workflow's stamp does.
 
 ## Contributing
 

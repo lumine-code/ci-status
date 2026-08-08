@@ -16,6 +16,12 @@
 //
 // The order matters and is the whole point: stamping afterwards would leave
 // the result on the previous commit and the new one with no status at all.
+//
+// The push below has to carry a credential of its own — `STAMP_TOKEN` in
+// `.github/workflows/stamp.yml`. A push made with `GITHUB_TOKEN` triggers no
+// workflow, and starting the sweep any other way does not stand in for it:
+// GitHub shows only the suites a `push` raised, so a sweep begun by dispatch
+// leaves the stamp it was made for displaying nothing.
 
 const fs = require("fs");
 const path = require("path");
