@@ -55,21 +55,19 @@ the ones raised by `workflow_dispatch` and `schedule`. A dispatched sweep is att
 commit in the Actions tab and absent from the commit itself, which leaves the stamp carrying nothing
 and the badge reading no state at all — a worse failure than the ratchet stamping exists to fix.
 
-The whole sweep runs locally in one command, against the editor checkout the flat workspace already
-provides at `../lumine`:
+The whole sweep runs locally in one command. Point it at any editor checkout:
 
 ```
-npm run spec -- --only "linter marker-*"
+npm run spec -- --editor /path/to/lumine --only "linter marker-*"
 ```
 
-It plans, runs every shard in turn, and summarizes, failing the way CI would. Pass `--editor` to
-point at a different checkout, `--shards` to split the work, `--ref` to sweep a branch other than
-`master`, and `--help` for the rest. The three steps are still separate scripts underneath, because
-CI runs them on separate machines:
+It plans, runs every shard in turn, and summarizes, failing the way CI would. Pass `--shards` to
+split the work, `--ref` to sweep a branch other than `master`, and `--help` for the rest. The three
+steps are still separate scripts underneath, because CI runs them on separate machines:
 
 ```
 node scripts/plan-specs.js --only "linter marker-*" --shards 1
-node scripts/run-specs.js --plan plan.json --shard 0 --editor ../lumine
+node scripts/run-specs.js --plan plan.json --shard 0 --editor /path/to/lumine
 node scripts/summarize-specs.js --results results --plan plan.json
 ```
 

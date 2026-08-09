@@ -17,7 +17,7 @@ function parseArguments(argv) {
   const options = {
     plan: "plan.json",
     shard: 0,
-    editor: "lumine",
+    editor: null,
     out: null,
     timeout: 900,
     workspace: null,
@@ -44,6 +44,7 @@ function parseArguments(argv) {
   if (!Number.isInteger(options.timeout) || options.timeout < 1) {
     throw new Error("--timeout must be a positive number of seconds.");
   }
+  if (!options.editor) throw new Error("--editor <path> is required.");
   // Every platform's shard 0 writes a file; name it after the platform too, so
   // the results survive being collected into one directory.
   const platform = (process.env.RUNNER_OS || process.platform).toLowerCase();

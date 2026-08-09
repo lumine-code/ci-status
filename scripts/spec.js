@@ -18,7 +18,7 @@ const HERE = __dirname;
 
 function parseArguments(argv) {
   const options = {
-    editor: path.join("..", "lumine"),
+    editor: null,
     only: [],
     shards: 1,
     ref: "master",
@@ -45,6 +45,7 @@ function parseArguments(argv) {
   if (!Number.isInteger(options.shards) || options.shards < 1) {
     throw new Error("--shards must be a positive integer.");
   }
+  if (!options.help && !options.editor) throw new Error("--editor <path> is required.");
   return options;
 }
 
@@ -53,15 +54,14 @@ Usage: npm run spec -- [options]
 
   --only <patterns>   Packages to sweep; globs allowed, repeatable.
                       Defaults to every package in the organization.
-  --editor <path>     The editor checkout to run the specs inside.
-                      Defaults to ../lumine, which the flat workspace provides.
+  --editor <path>     Editor checkout to run the specs inside (required).
   --shards <n>        Split the work over n shards, run one after another (1).
   --ref <branch>      The branch of each package to sweep (master).
   --keep              Keep plan.json and results/ from the previous run.
 
 Examples:
-  npm run spec -- --only "minimap scrollmap"
-  npm run spec -- --only "language-*" --editor ../lumine
+  npm run spec -- --editor /path/to/lumine --only "minimap scrollmap"
+  npm run spec -- --editor /path/to/lumine --only "language-*"
 `.trim();
 
 function step(scriptName, args) {
