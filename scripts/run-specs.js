@@ -133,6 +133,30 @@ function remove(target) {
   fs.rmSync(target, { recursive: true, force: true, maxRetries: 3 });
 }
 
+// A clone and an install are each one network round trip from a shared runner,
+// and a single unlucky one — a TLS handshake that fails, a registry that
+// rate-limits — reports a package as broken until the next sweep. Try again,
+// and say on the run's summary that it was retried: a package that is genuinely
+// unreachable still fails, with the message of its last attempt.
+function withRetries(label, attempts, body) {
+  let result;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    result = body();
+    if (result.code === 0) {
+      if (attempt > 1) {
+        process.stdout.write(`::notice title=${label}::succeeded on attempt ${attempt}\n`);
+      }
+      return result;
+    }
+    if (attempt < attempts) {
+      process.stdout.write(
+        `::warning title=${label}::attempt ${attempt} of ${attempts} failed (${result.message}); retrying\n`,
+      );
+    }
+  }
+  return result;
+}
+
 function checkout(entry, directory) {
   remove(directory);
   if (entry.refType === "commit") {
@@ -283,7 +307,7 @@ function main() {
       remove(home);
       fs.mkdirSync(home, { recursive: true });
 
-      const cloned = checkout(entry, directory);
+      const cloned = withRetries(`${entry.name} checkout`, 3, () => checkout(entry, directory));
       if (cloned.code !== 0) {
         record.status = "error";
         record.message = `checkout failed: ${cloned.message}`;
@@ -298,7 +322,7 @@ function main() {
         return;
       }
 
-      const installed = install(directory);
+      const installed = withRetries(`${entry.name} install`, 3, () => install(directory));
       if (installed.code !== 0) {
         record.status = "error";
         record.message = `install failed: ${installed.message}`;
