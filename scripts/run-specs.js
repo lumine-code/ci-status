@@ -185,15 +185,18 @@ function checkout(entry, directory) {
   ]);
 }
 
-// `--ignore-scripts` matches how every package's own CI installs itself, and
-// keeps a hundred repositories' install hooks from running on the runner.
-// Anything native it skips is rebuilt below, deliberately rather than by
-// whatever the dependency's own install script would have done.
+// Not `--ignore-scripts`: npm's allow-scripts gate already blocks every
+// dependency hook a repository has not approved in its own `allowScripts`, so
+// this runs what a package deliberately signed off and nothing else. No planned
+// repository has an install hook of its own, so the gate is the whole story.
+// Skipping wholesale instead would install a git-hosted fork whose `prepare` is
+// what emits its entry point without a `main` -- the same reason the editor's
+// own install in the workflow does not skip either.
 function install(directory) {
   const lockfile = fs.existsSync(path.join(directory, "package-lock.json"));
   const args = lockfile
-    ? "ci --ignore-scripts --no-audit --no-fund"
-    : "install --ignore-scripts --no-audit --no-fund --no-package-lock";
+    ? "ci --no-audit --no-fund"
+    : "install --no-audit --no-fund --no-package-lock";
   const result = shell(`npm ${args}`, directory);
   if (result.code === 0) return result;
   return { ...result, message: result.message || `npm ${args.split(" ")[0]} failed` };
@@ -223,10 +226,11 @@ function findNativeModules(directory) {
 }
 
 // The specs run inside the editor, so a package's own native dependency has to
-// match Electron's ABI rather than Node's — dropping `--ignore-scripts` would
-// build it against Node and it would fail to load with a NODE_MODULE_VERSION
-// mismatch instead. Rebuild with the editor's own electron-rebuild, at the
-// editor's Electron version: the same step the editor runs over its own tree.
+// match Electron's ABI rather than Node's, and the install above either built it
+// against Node or left it unbuilt. `--force` settles both: rebuild with the
+// editor's own electron-rebuild, at the editor's Electron version — the same
+// step the editor runs over its own tree. Without it a V8-facing addon fails to
+// load with a NODE_MODULE_VERSION mismatch.
 function rebuildNativeModules(directory, editorDirectory) {
   const native = findNativeModules(directory);
   if (native.length === 0) return { code: 0 };
