@@ -159,9 +159,8 @@ jobs:
       - name: Use HTTPS for GitHub git dependencies
         shell: bash
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-      # Not `--ignore-scripts`: node-pty is a TypeScript package whose `prepare`
-      # emits `lib/`, and nothing later reproduces it. npm's allow-scripts gate
-      # keeps everything absent from the editor's `allowScripts` list skipped.
+      # Not `--ignore-scripts`: npm's allow-scripts gate already keeps everything
+      # absent from the editor's `allowScripts` list skipped.
       # Preparing the git-hosted forks is flaky on Windows, so retry.
       - name: Install editor dependencies
         working-directory: lumine
