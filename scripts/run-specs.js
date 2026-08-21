@@ -258,6 +258,25 @@ function rebuildNativeModules(directory, editorDirectory) {
   return { code: 0 };
 }
 
+// Specs may activate packages the editor no longer bundles; the package names
+// them in a top-level `specPackages` manifest array, and the editor's own
+// provisioning script clones each one into this run's private LUMINE_HOME. The
+// names then travel to the test bootstrap through LUMINE_TEST_PACKAGES, which
+// is what links them into the scratch config directory a spec run builds.
+function specPackagesOf(directory) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
+  return manifest.specPackages || [];
+}
+
+function installSpecPackages(directory, editorDirectory, home) {
+  const script = path.join(editorDirectory, "script", "install-spec-packages.js");
+  if (!fs.existsSync(script)) {
+    return { code: 1, message: "the editor has no install-spec-packages.js to provision with" };
+  }
+  // The script does its own clone and install retries, so no withRetries here.
+  return run(process.execPath, [script, "--package", directory, "--home", home]);
+}
+
 function runSpecs(specDirectory, editorDirectory, options, environment) {
   const prefix = [];
   // macOS runners ship no GNU `timeout`; Homebrew's coreutils calls it
@@ -340,11 +359,24 @@ function main() {
         return;
       }
 
+      const specPackages = specPackagesOf(directory);
+      if (specPackages.length > 0) {
+        const provisioned = installSpecPackages(directory, editorDirectory, home);
+        if (provisioned.code !== 0) {
+          record.status = "error";
+          record.message = `spec packages failed: ${provisioned.message}`;
+          return;
+        }
+      }
+
       const environment = {
         ...process.env,
         LUMINE_HOME: home,
         LUMINE_JASMINE_REPORTER: "list",
       };
+      if (specPackages.length > 0) {
+        environment.LUMINE_TEST_PACKAGES = specPackages.join(" ");
+      }
       const specs = runSpecs(specDirectory, editorDirectory, options, environment);
       if (specs.code !== 0) {
         record.status = "failed";
