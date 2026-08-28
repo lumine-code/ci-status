@@ -112,10 +112,6 @@ function capture(command, args, cwd) {
   return result.status === 0 ? String(result.stdout).trim() : null;
 }
 
-function has(command) {
-  return spawnSync(bash(), ["-c", `command -v ${command} >/dev/null 2>&1`]).status === 0;
-}
-
 function quote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
@@ -279,18 +275,27 @@ function installSpecPackages(directory, editorDirectory, home) {
 
 function runSpecs(specDirectory, editorDirectory, options, environment) {
   const prefix = [];
-  // macOS runners ship no GNU `timeout`; Homebrew's coreutils calls it
-  // `gtimeout`. Without either, the job's own timeout is the backstop.
-  if (has("timeout")) prefix.push("timeout", "--kill-after=30s", `${options.timeout}s`);
-  else if (has("gtimeout")) prefix.push("gtimeout", "--kill-after=30s", `${options.timeout}s`);
   if (process.platform === "linux") prefix.push("xvfb-run", "--auto-servernum");
   const command = `${prefix.join(" ")} npm start -- --test ${quote(specDirectory)}`.trim();
-  const result = shell(command, editorDirectory, environment);
+  const result = run(
+    process.execPath,
+    [
+      path.join(__dirname, "run-headless-specs.js"),
+      "--timeout",
+      String(options.timeout),
+      "--cwd",
+      editorDirectory,
+      "--",
+      bash(),
+      "-c",
+      command,
+    ],
+    __dirname,
+    environment,
+  );
   const { code } = result;
   if (result.message) return result;
-  // `timeout` reports 124 when it had to fire, which is a hang rather than a
-  // failing expectation and worth naming as one in the summary.
-  if (code === 124 || code === 137) {
+  if (code === 124) {
     return { code, message: `timed out after ${options.timeout}s` };
   }
   return code === 0 ? { code: 0 } : { code, message: `specs failed (exit ${code})` };
