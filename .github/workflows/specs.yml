@@ -230,6 +230,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Install per-package timeout
+        if: runner.os == 'macOS'
+        run: brew install coreutils
       - name: Install headless-display dependencies
         if: runner.os == 'Linux'
         run: |
