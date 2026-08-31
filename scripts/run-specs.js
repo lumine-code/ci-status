@@ -1,12 +1,12 @@
 "use strict";
 
-// Run one shard of the plan produced by `plan-specs.js`.
+// Run one package or one local shard of the plan produced by `plan-specs.js`.
 //
 // Each package is cloned at its resolved ref, its dependencies installed, and
 // its Jasmine suite run inside the prebuilt editor checkout — the same
 // invocation every package's own CI uses, so a failure here means the same
-// thing it would there. The checkout is discarded afterwards: a hundred package
-// trees with their `node_modules` do not fit on a runner.
+// thing it would there. Every checkout is discarded afterwards, which also keeps
+// a local multi-package shard from filling its machine with `node_modules`.
 
 const fs = require("fs");
 const os = require("os");
@@ -17,6 +17,7 @@ function parseArguments(argv) {
   const options = {
     plan: "plan.json",
     shard: 0,
+    package: null,
     editor: null,
     out: null,
     timeout: 900,
@@ -32,6 +33,7 @@ function parseArguments(argv) {
     };
     if (argument === "--plan") options.plan = next();
     else if (argument === "--shard") options.shard = Number(next());
+    else if (argument === "--package") options.package = next();
     else if (argument === "--editor") options.editor = next();
     else if (argument === "--out") options.out = next();
     else if (argument === "--timeout") options.timeout = Number(next());
@@ -45,10 +47,14 @@ function parseArguments(argv) {
     throw new Error("--timeout must be a positive number of seconds.");
   }
   if (!options.editor) throw new Error("--editor <path> is required.");
-  // Every platform's shard 0 writes a file; name it after the platform too, so
-  // the results survive being collected into one directory.
+  // Name local shard results after the platform so they survive collection.
+  // A CI package job writes one disposable result named after the package.
   const platform = (process.env.RUNNER_OS || process.platform).toLowerCase();
-  options.out = options.out || `results/shard-${platform}-${options.shard}.json`;
+  options.out =
+    options.out ||
+    (options.package
+      ? `results/package-${platform}-${options.package}.json`
+      : `results/shard-${platform}-${options.shard}.json`);
   return options;
 }
 
@@ -132,8 +138,8 @@ function remove(target) {
 // A clone and an install are each one network round trip from a shared runner,
 // and a single unlucky one — a TLS handshake that fails, a registry that
 // rate-limits — reports a package as broken until the next sweep. Try again,
-// and say on the run's summary that it was retried: a package that is genuinely
-// unreachable still fails, with the message of its last attempt.
+// and annotate the retry: a package that is genuinely unreachable still fails,
+// with the message of its last attempt.
 function withRetries(label, attempts, body) {
   let result;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -308,7 +314,12 @@ function main() {
   const workspace = path.resolve(
     options.workspace || path.join(process.env.RUNNER_TEMP || os.tmpdir(), "lumine-specs"),
   );
-  const entries = plan.packages.filter((entry) => entry.shard === options.shard);
+  const entries = options.package
+    ? plan.packages.filter((entry) => entry.name === options.package)
+    : plan.packages.filter((entry) => entry.shard === options.shard);
+  if (options.package && entries.length !== 1) {
+    throw new Error(`The plan contains no unique package named ${options.package}.`);
+  }
 
   fs.mkdirSync(workspace, { recursive: true });
   fs.mkdirSync(path.dirname(path.resolve(options.out)), { recursive: true });
@@ -317,7 +328,7 @@ function main() {
   for (const entry of entries) {
     const directory = path.join(workspace, "checkout", entry.name);
     // A private LUMINE_HOME per package: nothing one suite writes to the config
-    // directory can reach the next one in the shard.
+    // directory can reach another package in a local shard.
     const home = path.join(workspace, "home", entry.name);
     const startedAt = Date.now();
     const record = {
@@ -394,26 +405,39 @@ function main() {
     if (record.status === "failed" || record.status === "error") {
       process.stdout.write(`::error title=${entry.name}::${record.message}\n`);
     }
-    // Reclaim the disk before the next package: a shard's worth of package
-    // trees with their dependencies would otherwise fill the runner.
+    // Reclaim the disk before another local package: a shard's worth of trees
+    // with their dependencies would otherwise fill the machine.
     remove(directory);
     remove(home);
   }
 
   fs.writeFileSync(
     path.resolve(options.out),
-    `${JSON.stringify({ shard: options.shard, platform: PLATFORM, results }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        package: options.package,
+        shard: options.package ? null : options.shard,
+        platform: PLATFORM,
+        results,
+      },
+      null,
+      2,
+    )}\n`,
   );
 
   const failed = results.filter(
     (result) => result.status === "failed" || result.status === "error",
   );
-  process.stdout.write(
-    `${PLATFORM} shard ${options.shard}: ${results.length} packages, ${failed.length} failing.\n`,
-  );
-  // The shard always writes its results and always exits zero; the summary job
-  // is what turns the fleet's outcome into the run's outcome, so one broken
-  // package cannot hide the ones that follow it in a later shard.
+  if (options.package) {
+    process.stdout.write(`${PLATFORM} ${options.package}: ${results[0].status}.\n`);
+    if (failed.length > 0) process.exitCode = 1;
+  } else {
+    process.stdout.write(
+      `${PLATFORM} shard ${options.shard}: ${results.length} packages, ${failed.length} failing.\n`,
+    );
+    // A local shard always writes every result and exits zero. The local driver
+    // summarizes after all shards, so one broken package cannot hide a later one.
+  }
 }
 
 try {

@@ -214,9 +214,9 @@ async function main() {
   const plan = { org, ref, shards, packages, unresolved };
   fs.writeFileSync(options.out, `${JSON.stringify(plan, null, 2)}\n`);
 
-  // A repository that looks like a package but cannot be resolved is reported
-  // in the same shape a shard reports a failing suite, so the summary job
-  // fails the run without the rest going untested.
+  // Keep unresolved repositories in the local result stream as well as the
+  // plan. CI fails its planning job for them after uploading the plan, while
+  // local multi-package runs still consume this result in their final report.
   if (unresolved.length > 0) {
     fs.mkdirSync(path.dirname(path.resolve(options.resultsOut)), { recursive: true });
     fs.writeFileSync(
@@ -240,6 +240,8 @@ async function main() {
   }
 
   writeOutput("count", packages.length);
+  writeOutput("packages", JSON.stringify(packages.map((entry) => entry.name)));
+  writeOutput("unresolved", unresolved.length);
   writeOutput("shards", JSON.stringify(Array.from({ length: shards }, (unused, index) => index)));
   writeSummary(options.summary, [
     `## Fleet at \`${ref}\``,

@@ -9,8 +9,8 @@ This repository owns no packages; it reports on them. A red run here means a pac
 - **Discovery from the organization**: sweeps every lumine-code repository whose manifest declares an `engines.lumine` range, so nothing needs editing when a package is added or retired.
 - **Every package, not just the catalogued ones**: covers packages the editor bundles as well as packages the install catalog lists, and both at `master`.
 - **Three platforms**: Linux, macOS and Windows, against one editor build per platform.
-- **Sharded**: the fleet is spread over parallel spec jobs, each running its packages one at a time in its own Electron session with a private `LUMINE_HOME`.
-- **Nothing hides**: every shard reports whatever it got through, and a package no shard reported on is named rather than passing silently.
+- **One check per package and platform**: every suite runs as its own Linux, macOS and Windows job with a private `LUMINE_HOME`.
+- **Nothing hides**: a package reports its own pending, passing or failing check instead of disappearing behind a fleet summary.
 
 ## What it answers
 

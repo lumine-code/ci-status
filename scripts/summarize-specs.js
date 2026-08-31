@@ -1,9 +1,8 @@
 "use strict";
 
-// Merge the per-shard result files into one platform matrix and decide the
-// run's outcome. Keeping this out of the shards is deliberate: every shard runs
-// every package it was given and reports, so a single failing suite never hides
-// the ones behind it, and a shard that died still leaves the rest legible.
+// Merge a local sweep's per-shard result files into one platform matrix and
+// decide its outcome. CI gives every package its own native check; this reporter
+// remains for `npm run spec`, where shards avoid repeating setup on one machine.
 
 const fs = require("fs");
 const path = require("path");
@@ -32,8 +31,8 @@ function parseArguments(argv) {
   return options;
 }
 
-// Each platform's shards upload their own artifact, so the download lands them
-// in sibling directories; walk for anything that looks like a result file.
+// Walk nested directories too, so results collected from more than one local
+// platform can still be summarized together.
 function readShards(directory) {
   const shards = [];
   const walk = (current) => {
@@ -82,7 +81,7 @@ function main() {
     entry.byPlatform[result.platform || "—"] = result;
   }
 
-  // A package the plan listed but no shard reported on means a spec job died or
+  // A package the plan listed but no shard reported on means a local run died or
   // was cancelled. Silence there would read as success, so name it.
   const missing = [];
   if (options.plan && fs.existsSync(options.plan)) {

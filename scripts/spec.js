@@ -2,10 +2,9 @@
 
 // Run the whole sweep locally: plan, every shard in turn, then summarize.
 //
-// The three steps CI runs are kept as separate scripts because CI runs them on
-// separate machines. Locally there is one machine, and typing all three by hand
-// with matching `--plan` and `--shard` arguments is a good way to summarize a
-// stale result file. This drives them in order and fails the way CI would.
+// CI gives every package and platform its own job. Locally there is one machine,
+// so running those jobs one by one would repeat setup without adding isolation.
+// This driver keeps the local shard mode, then summarizes every result at once.
 //
 // It shells out to the same scripts rather than importing them, so a local run
 // exercises exactly what a runner exercises.
@@ -114,9 +113,9 @@ function main() {
     return;
   }
 
-  // Shards never fail: each records what it got and the summary decides the
-  // outcome, exactly as in CI. A shard that dies outright is caught by the
-  // summary too, as a package nothing reported on.
+  // Local shards never fail for an individual suite: each records everything it
+  // got through, then the summary decides the overall outcome. A shard that dies
+  // outright is caught too, as a package nothing reported on.
   for (let shard = 0; shard < plan.shards; shard += 1) {
     step("run-specs.js", [
       "--plan",

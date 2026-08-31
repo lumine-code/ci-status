@@ -8,7 +8,7 @@ name: Package specs
 # why the sweep lives here rather than on the install catalog, whose commits it
 # used to mark red for other repositories' bugs.
 #
-# The editor is built once per platform and handed to that platform's spec jobs
+# The editor is built once per platform and handed to that platform's package jobs
 # as an artifact. Building it per package would cost an hour of runner time for
 # every ten packages; building it once per platform costs it three times.
 
@@ -28,10 +28,6 @@ on:
         description: Platforms to run on, comma-separated.
         required: false
         default: ubuntu-latest,macos-latest,windows-latest
-      shards:
-        description: How many spec jobs to spread the fleet over, per platform.
-        required: false
-        default: "12"
       editor-ref:
         description: The lumine-code/lumine ref to build the editor from.
         required: false
@@ -67,8 +63,9 @@ jobs:
     timeout-minutes: 20
     outputs:
       count: ${{ steps.plan.outputs.count }}
-      shards: ${{ steps.plan.outputs.shards }}
+      packages: ${{ steps.plan.outputs.packages }}
       platforms: ${{ steps.platforms.outputs.list }}
+      unresolved: ${{ steps.plan.outputs.unresolved }}
       editor-sha: ${{ steps.editor.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
@@ -76,7 +73,7 @@ jobs:
         with:
           node-version: 24
       # Pin the editor commit here, once, so all three platform builds and every
-      # shard of every platform test the same editor. Resolving it per job would
+      # package job test the same editor. Resolving it per job would
       # let a push to the editor land mid-run and split the results.
       - name: Resolve the editor commit
         id: editor
@@ -92,7 +89,16 @@ jobs:
         env:
           PLATFORMS: ${{ inputs.platforms || 'ubuntu-latest,macos-latest,windows-latest' }}
         run: |
-          list=$(node -e 'console.log(JSON.stringify(process.argv[1].split(",").map((p) => p.trim()).filter(Boolean)))' "$PLATFORMS")
+          list=$(node -e '
+            const allowed = new Set(["ubuntu-latest", "macos-latest", "windows-latest"]);
+            const list = [...new Set(process.argv[1].split(",").map((value) => value.trim()).filter(Boolean))];
+            const invalid = list.filter((value) => !allowed.has(value));
+            if (list.length === 0 || invalid.length > 0) {
+              console.error(`Platforms must be a non-empty subset of ${[...allowed].join(", ")}.`);
+              process.exit(1);
+            }
+            console.log(JSON.stringify(list));
+          ' "$PLATFORMS")
           echo "list=$list" >> "$GITHUB_OUTPUT"
       # Discovery reads the organization, so it needs a token for the repository
       # listing; the manifests and refs it reads afterwards cost no API quota.
@@ -101,10 +107,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ONLY: ${{ inputs.packages }}
-          SHARDS: ${{ inputs.shards || '12' }}
           PACKAGE_REF: ${{ inputs.package-ref || 'master' }}
         run: |
-          args=(--out plan.json --shards "$SHARDS" --ref "$PACKAGE_REF")
+          args=(--out plan.json --shards 1 --ref "$PACKAGE_REF")
           if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
           node scripts/plan-specs.js "${args[@]}"
       - uses: actions/upload-artifact@v6
@@ -112,20 +117,16 @@ jobs:
           name: spec-plan
           path: plan.json
           retention-days: 7
-      # A repository that looks like a package but does not resolve is reported
-      # in the same shape a shard reports a failing suite, so the summary job
-      # fails the run without the other packages going untested.
-      - uses: actions/upload-artifact@v6
-        with:
-          name: spec-results-plan
-          path: results/
-          if-no-files-found: ignore
-          retention-days: 7
+      # Fail discovery visibly, but only after publishing the valid plan. Every
+      # downstream job uses `!cancelled()`, so resolved packages still run.
+      - name: Fail unresolved packages
+        if: steps.plan.outputs.unresolved != '0'
+        run: exit 1
 
   editor:
     name: Build the editor (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.count != '0'
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -202,25 +203,25 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  specs:
-    # One job per platform per shard, each running its packages one at a time in
-    # its own Electron session with a private LUMINE_HOME — the same isolation
-    # the editor's own CI gives its bundled packages.
-    name: Specs ${{ matrix.os }} ${{ matrix.shard }}
+  specs-linux:
+    # A matrix may expand to at most 256 jobs, while the fleet across three
+    # platforms is larger than that. Keep one matrix per platform: every leg is
+    # one native check whose name and result identify the package directly.
+    name: ${{ matrix.package }} (Linux)
     needs: [plan, editor]
     # `needs` cannot depend on one leg of a matrix, so a single platform whose
     # editor failed to build would otherwise skip every platform's specs. Run
-    # anyway: the shards whose editor exists report normally, and the ones whose
-    # editor is missing fail on the download with the reason in plain sight.
-    if: ${{ !cancelled() && needs.plan.outputs.count != '0' }}
+    # anyway: package jobs whose editor exists report normally, and the ones
+    # whose editor is missing fail on the download with the reason in plain sight.
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && contains(fromJSON(needs.plan.outputs.platforms), 'ubuntu-latest') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 300
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(needs.plan.outputs.platforms) }}
-        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
-    steps:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+        os: [ubuntu-latest]
+    steps: &package-spec-steps
       - name: Enable Git symlinks on Windows
         if: runner.os == 'Windows'
         run: git config --global core.symlinks true
@@ -254,38 +255,32 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: spec-plan
-      - name: Run this shard's package specs
+      - name: Run ${{ matrix.package }} specs
         shell: bash
-        run: node scripts/run-specs.js --plan plan.json --shard ${{ matrix.shard }} --editor lumine
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: spec-results-${{ matrix.os }}-${{ matrix.shard }}
-          path: results/
-          retention-days: 7
+        run: node scripts/run-specs.js --plan plan.json --package "${{ matrix.package }}" --editor lumine
 
-  summary:
-    name: Summary
-    needs: [plan, specs]
-    if: always() && needs.plan.outputs.count != '0'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - uses: actions/download-artifact@v7
-        with:
-          name: spec-plan
-      # Each platform's shards upload their own artifact, and their file names
-      # collide across platforms — keep them in sibling directories.
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: spec-results-*
-          path: results
-      # The only step that fails the run. Every shard reports whatever it got
-      # through, so one broken package never hides the ones behind it, and the
-      # plan is what proves a shard that died did not just go quiet.
-      - name: Report
-        run: node scripts/summarize-specs.js --results results --plan plan.json
+  specs-macos:
+    name: ${{ matrix.package }} (macOS)
+    needs: [plan, editor]
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && contains(fromJSON(needs.plan.outputs.platforms), 'macos-latest') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+        os: [macos-latest]
+    steps: *package-spec-steps
+
+  specs-windows:
+    name: ${{ matrix.package }} (Windows)
+    needs: [plan, editor]
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && contains(fromJSON(needs.plan.outputs.platforms), 'windows-latest') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+        os: [windows-latest]
+    steps: *package-spec-steps
