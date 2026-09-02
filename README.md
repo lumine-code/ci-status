@@ -1,6 +1,6 @@
 # ci-status
 
-Run every lumine-code package's specs at master.
+Run every lumine-code package's specs at master against a real editor build.
 
 This repository owns no packages; it reports on them. A red run here means a package regressed, never that this repository is broken.
 
