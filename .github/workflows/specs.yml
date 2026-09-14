@@ -175,6 +175,12 @@ jobs:
       - name: Rebuild native modules for Electron
         working-directory: lumine
         run: npm run build
+      # Bundle the plan with the editor so every package job needs one artifact
+      # lookup, not a second simultaneous lookup for the same tiny plan. At fleet
+      # scale those duplicate requests can be throttled by the artifact service.
+      - uses: actions/download-artifact@v7
+        with:
+          name: spec-plan
       # An artifact stores neither symlinks nor an executable bit, and the tree
       # holds both — `node_modules/.bin` and the Electron binary — so pack it
       # ourselves. Everything here is relative to the workspace: a Windows
@@ -192,9 +198,9 @@ jobs:
         run: |
           set -o pipefail
           if command -v zstd >/dev/null 2>&1; then
-            tar -cf - lumine | zstd -3 -T0 -o lumine-editor.tar.zst
+            tar -cf - lumine plan.json | zstd -3 -T0 -o lumine-editor.tar.zst
           else
-            tar -czf lumine-editor.tar.gz lumine
+            tar -czf lumine-editor.tar.gz lumine plan.json
           fi
       - uses: actions/upload-artifact@v6
         with:
@@ -252,9 +258,6 @@ jobs:
             tar -xzf lumine-editor.tar.gz
           fi
           rm -f lumine-editor.tar.*
-      - uses: actions/download-artifact@v7
-        with:
-          name: spec-plan
       - name: Run ${{ matrix.package }} specs
         shell: bash
         run: node scripts/run-specs.js --plan plan.json --package "${{ matrix.package }}" --editor lumine
