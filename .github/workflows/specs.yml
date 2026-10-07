@@ -72,6 +72,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Test discovery retries
+        run: node --test scripts/*.test.js
       # Pin the editor commit here, once, so all three platform builds and every
       # package job test the same editor. Resolving it per job would
       # let a push to the editor land mid-run and split the results.

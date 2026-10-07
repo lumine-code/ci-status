@@ -15,14 +15,13 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
+const { fetchWithRetries } = require("./fetch-with-retries");
+const { lsRemote } = require("./resolve-ref");
 
 // Listing the organization costs a couple of API calls; everything after that
 // is raw file fetches and ls-remote, neither of which touches the API quota.
-// The fleet is ~150 repositories, so resolve a few at a time rather than
-// serially.
+// Resolve a few repositories at a time rather than serially.
 const CONCURRENCY = 8;
-const LS_REMOTE_TIMEOUT_MS = 60000;
 const API = "https://api.github.com";
 const RAW = "https://raw.githubusercontent.com";
 
@@ -93,7 +92,7 @@ function apiHeaders() {
 async function listRepositories(org) {
   const repositories = [];
   for (let page = 1; ; page += 1) {
-    const response = await fetch(`${API}/orgs/${org}/repos?per_page=100&page=${page}`, {
+    const response = await fetchWithRetries(`${API}/orgs/${org}/repos?per_page=100&page=${page}`, {
       headers: apiHeaders(),
     });
     if (!response.ok) {
@@ -114,7 +113,7 @@ async function listRepositories(org) {
 // editor's own bundled-package scan decides it. A repository with no manifest
 // at this ref is not a package and is not an error.
 async function readManifest(org, name, ref) {
-  const response = await fetch(`${RAW}/${org}/${name}/${ref}/package.json`, {
+  const response = await fetchWithRetries(`${RAW}/${org}/${name}/${ref}/package.json`, {
     headers: { "User-Agent": "lumine-code-ci-status" },
   });
   if (response.status === 404) return null;
@@ -126,24 +125,6 @@ async function readManifest(org, name, ref) {
   } catch (error) {
     throw new Error(`The manifest is not valid JSON: ${error.message}`);
   }
-}
-
-function lsRemote(cloneUrl, ref) {
-  return new Promise((resolve, reject) => {
-    execFile(
-      "git",
-      ["ls-remote", cloneUrl, `refs/heads/${ref}`],
-      { timeout: LS_REMOTE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(new Error(String(stderr || error.message).trim().split(/\r?\n/)[0]));
-          return;
-        }
-        const match = String(stdout).match(/^([0-9a-f]{40})\s/i);
-        resolve(match ? match[1].toLowerCase() : null);
-      },
-    );
-  });
 }
 
 async function mapWithConcurrency(items, limit, worker) {
