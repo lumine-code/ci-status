@@ -385,6 +385,14 @@ function main() {
         }
       }
 
+      // The renderer loads the target from its spec path, but the main-process
+      // lumine:// asset handler resolves installed package directories. Expose
+      // this exact checkout there too, even when no spec neighbors are needed.
+      const { name } = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
+      const packagePath = path.join(home, "packages", name);
+      fs.mkdirSync(path.dirname(packagePath), { recursive: true });
+      fs.symlinkSync(directory, packagePath, process.platform === "win32" ? "junction" : "dir");
+
       const environment = {
         ...process.env,
         LUMINE_HOME: home,
