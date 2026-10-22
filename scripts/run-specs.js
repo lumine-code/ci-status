@@ -330,6 +330,7 @@ function main() {
     // A private LUMINE_HOME per package: nothing one suite writes to the config
     // directory can reach another package in a local shard.
     const home = path.join(workspace, "home", entry.name);
+    let exposedPackagePath = null;
     const startedAt = Date.now();
     const record = {
       name: entry.name,
@@ -392,6 +393,7 @@ function main() {
       const packagePath = path.join(home, "packages", name);
       fs.mkdirSync(path.dirname(packagePath), { recursive: true });
       fs.symlinkSync(directory, packagePath, process.platform === "win32" ? "junction" : "dir");
+      exposedPackagePath = packagePath;
 
       const environment = {
         ...process.env,
@@ -415,8 +417,17 @@ function main() {
     }
     // Reclaim the disk before another local package: a shard's worth of trees
     // with their dependencies would otherwise fill the machine.
-    remove(directory);
+    // Detach our package alias before deleting its target or either parent.
+    // Recursive cleanup must never need to traverse this checkout junction.
+    if (exposedPackagePath) {
+      try {
+        fs.unlinkSync(exposedPackagePath);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
     remove(home);
+    remove(directory);
   }
 
   fs.writeFileSync(

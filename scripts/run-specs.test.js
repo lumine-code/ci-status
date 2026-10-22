@@ -7,8 +7,11 @@ const path = require("node:path");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-for (const neighbors of [[], ["neighbor-package"]]) {
-  test(`the spec launch exposes the target's assets with ${neighbors.length} spec neighbors`, (t) => {
+const scenarios = [[], ["neighbor-package"]].flatMap((neighbors) =>
+  [false, true].map((removeAlias) => ({ neighbors, removeAlias })),
+);
+for (const { neighbors, removeAlias } of scenarios) {
+  test(`the spec launch exposes the target's assets with ${neighbors.length} spec neighbors (${removeAlias ? "suite removes alias" : "alias retained"})`, (t) => {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lumine-ci-package-assets-"));
     assert.equal(path.dirname(temporary), path.resolve(os.tmpdir()));
     t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
@@ -43,6 +46,21 @@ for (const neighbors of [[], ["neighbor-package"]]) {
     );
     let launched = false;
     let stderr = "";
+    const fixtureFs = {
+      ...fs,
+      rmSync(target, options) {
+        if (launched && target === path.join(workspace, "checkout", "checkout-name")) {
+          assert.equal(
+            fs.lstatSync(path.join(workspace, "home", "checkout-name", "packages", manifest.name), {
+              throwIfNoEntry: false,
+            }),
+            undefined,
+            "detach the package alias before deleting its checkout",
+          );
+        }
+        return fs.rmSync(target, options);
+      },
+    };
     const fakeProcess = {
       argv: [
         process.execPath,
@@ -108,13 +126,15 @@ for (const neighbors of [[], ["neighbor-package"]]) {
             assert.equal(options.env.LUMINE_TEST_PACKAGES, neighbors.join(" "));
           }
           launched = true;
+          if (removeAlias) fs.unlinkSync(installed);
           return { status: 0 };
         }
         throw new Error(`Unexpected process: ${command} ${JSON.stringify(args)}`);
       },
     };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, "run-specs.js"), "utf8"), {
-      require: (name) => (name === "child_process" ? childProcess : require(name)),
+      require: (name) =>
+        name === "child_process" ? childProcess : name === "fs" ? fixtureFs : require(name),
       __dirname,
       process: fakeProcess,
     });
