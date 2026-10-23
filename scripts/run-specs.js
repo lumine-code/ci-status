@@ -206,6 +206,14 @@ function install(directory) {
   };
 }
 
+function runPretest(directory) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
+  if (typeof manifest.scripts?.pretest !== "string" || !manifest.scripts.pretest.trim()) {
+    return { code: 0 };
+  }
+  return shell("npm run pretest", directory);
+}
+
 // A `binding.gyp` is what marks a dependency as node-gyp native. Scoped
 // packages nest one level deeper, so look through both shapes.
 function findNativeModules(directory) {
@@ -405,6 +413,13 @@ function runPlan(options, report, save) {
         if (installed.code !== 0) {
           record.status = "error";
           record.message = `install failed: ${installed.message}`;
+          return;
+        }
+
+        const prepared = runPretest(directory);
+        if (prepared.code !== 0) {
+          record.status = "error";
+          record.message = `pretest failed: ${prepared.message}`;
           return;
         }
 

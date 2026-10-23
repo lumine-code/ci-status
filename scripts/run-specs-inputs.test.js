@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function fixture(t, { hasSpecs = true } = {}) {
+function fixture(t, { hasSpecs = true, pretest } = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lumine-ci-inputs-"));
   assert.equal(path.dirname(temporary), path.resolve(os.tmpdir()));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
@@ -46,7 +46,11 @@ function fixture(t, { hasSpecs = true } = {}) {
     git(directory, ["init", "--quiet", "--initial-branch=master", "--template="]);
     fs.writeFileSync(
       path.join(directory, "package.json"),
-      JSON.stringify({ name: "fixture-package", specPackages: [] }),
+      JSON.stringify({
+        name: "fixture-package",
+        specPackages: [],
+        ...(directory === repository && pretest !== undefined ? { scripts: { pretest } } : {}),
+      }),
     );
   }
   if (hasSpecs) fs.mkdirSync(path.join(repository, "spec"));
@@ -163,8 +167,18 @@ function execute(f, options = {}) {
       if (args[0] === "-c" && args[1] === "exit 0") return { status: 0 };
       if (args[0] === "-c" && args[1].startsWith("npm install"))
         return { status: options.installFails ? 1 : 0 };
+      if (args[0] === "-c" && args[1] === "npm run pretest") {
+        if (!options.pretestFails)
+          fs.writeFileSync(path.join(settings.cwd, "spec/pretest-ready.json"), "prepared");
+        return { status: options.pretestFails ? 1 : 0 };
+      }
       if (command === process.execPath && path.basename(args[0]) === "run-headless-specs.js") {
         const checkout = path.join(workspace, "checkout", "fixture-package");
+        if (options.expectPretest)
+          assert.equal(
+            fs.readFileSync(path.join(checkout, "spec/pretest-ready.json"), "utf8"),
+            "prepared",
+          );
         assert.equal(
           fs.readFileSync(path.join(checkout, "spec", "example.js"), "utf8"),
           "planned bytes",
@@ -220,6 +234,57 @@ test("a branch advancing after discovery still executes its planned immutable co
     f.plannedSha,
   );
 });
+
+test("a declared pretest prepares fixtures exactly once after install and before the spec launch", (t) => {
+  const f = fixture(t, { pretest: "node prepare-fixture.js" });
+  const r = execute(f, { expectPretest: true });
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.equal(r.launched, true);
+  assert.equal(r.report.results[0].status, "passed");
+  const pretests = r.events.filter((e) => e.args[0] === "-c" && e.args[1] === "npm run pretest");
+  assert.equal(pretests.length, 1);
+  const installed = r.events.findIndex(
+    (e) => e.args[0] === "-c" && e.args[1].startsWith("npm install"),
+  );
+  const prepared = r.events.indexOf(pretests[0]);
+  const launched = r.events.findIndex(
+    (e) => e.command === process.execPath && path.basename(e.args[0]) === "run-headless-specs.js",
+  );
+  assert.ok(installed < prepared && prepared < launched);
+  assert.equal(r.report.results[0].shaAfter, f.plannedSha);
+  assert.equal(r.report.results[0].editorShaAfter, f.editorSha);
+});
+
+test("a failed pretest is a durable error and prevents the Electron spec launch", (t) => {
+  const f = fixture(t, { pretest: "node prepare-fixture.js" });
+  const r = execute(f, { pretestFails: true, expectPretest: true });
+  assert.equal(r.exitCode, 1);
+  assert.equal(r.launched, false);
+  assert.equal(
+    r.events.filter((e) => e.args[0] === "-c" && e.args[1] === "npm run pretest").length,
+    1,
+  );
+  const record = r.report.results[0];
+  assert.equal(record.status, "error");
+  assert.match(record.message, /pretest failed/);
+  assert.equal(record.sha, f.plannedSha);
+  assert.equal(record.editorSha, f.editorSha);
+  assert.equal(record.shaAfter, undefined);
+});
+
+for (const pretest of [undefined, "", "   "]) {
+  test(`an absent or empty pretest adds no preparation command (${JSON.stringify(pretest)})`, (t) => {
+    const f = fixture(t, { pretest });
+    const r = execute(f);
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(r.launched, true);
+    assert.equal(r.report.results[0].status, "passed");
+    assert.equal(
+      r.events.some((e) => e.args[0] === "-c" && e.args[1] === "npm run pretest"),
+      false,
+    );
+  });
+}
 
 test("the real producer's no-spec skip survives the actual workflow fallback unchanged", (t) => {
   const f = fixture(t, { hasSpecs: false }),

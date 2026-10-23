@@ -15,9 +15,11 @@ This repository owns no packages; it reports on them. A red run here means a pac
 
 ## What it answers
 
-Each package is swept at `master`, so this answers *does the fleet work as it stands today*. That is deliberately a different question from the one the install catalog's own checks answer, which is *does the ref a user would install work* — the newest stable tag a repository publishes, and `master` only when it has never been tagged.
+Each package is swept at `master`, so this answers _does the fleet work as it stands today_. That is deliberately a different question from the one the install catalog's own checks answer, which is _does the ref a user would install work_ — the newest stable tag a repository publishes, and `master` only when it has never been tagged.
 
 The branch is a discovery selector: jobs fetch its recorded commit rather than resolving the branch again. `npm run spec -- --editor /path/to/lumine` records the local editor's HEAD in the plan; a manually produced plan needs `--editor-sha <full-sha>`. Result files retain the planned and observed package and editor commits, and a mismatch fails before the suite runs. Each CI job uploads its `spec-result-<platform>-<package>` artifact even when setup or specs fail.
+
+After installing a package's dependencies, the runner executes its declared nonempty `pretest` script once with `npm run pretest`, before native rebuild and editor specs. A pretest failure records an error and stops that package's spec launch.
 
 If setup stops before the runner, an always-run fallback records an error with the expected commits and any commit metadata it can still observe. Unknown observations stay null, test execution remains unattested, and any earlier runner report is preserved.
 
