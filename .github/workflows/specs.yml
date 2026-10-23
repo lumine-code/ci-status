@@ -296,11 +296,14 @@ jobs:
             const identity = validExpected && existing && record && existing.package === name && existing.expectedEditorSha === expectedEditorSha &&
               record.name === name && record.source === source && record.expectedSha === expectedSha &&
               record.expectedEditorSha === expectedEditorSha;
-            const passedInputs = existing?.editorSha === expectedEditorSha &&
-              record?.sha === expectedSha && record.shaAfter === expectedSha &&
-              record.editorSha === expectedEditorSha && record.editorShaAfter === expectedEditorSha;
+            const initialInputs = existing?.editorSha === expectedEditorSha &&
+              record?.sha === expectedSha && record.editorSha === expectedEditorSha;
+            const passedInputs = record?.status === 'passed' && initialInputs &&
+              record.shaAfter === expectedSha && record.editorShaAfter === expectedEditorSha;
+            const skippedInputs = record?.status === 'skipped' && initialInputs &&
+              record.shaAfter == null && record.editorShaAfter == null;
             if (identity && ['passed', 'failed', 'error'].includes(existing.status) &&
-                (existing.status !== 'passed' || (outcome === 'success' && passedInputs))) {
+                (existing.status !== 'passed' || (outcome === 'success' && (passedInputs || skippedInputs)))) {
               if (existing.status !== 'passed') process.exitCode = 1;
               return;
             }

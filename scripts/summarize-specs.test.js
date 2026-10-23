@@ -69,6 +69,16 @@ test("matching exact package and editor inputs remain green", (t) => {
   assert.equal(r.code, 0, r.text);
   assert.match(r.text, /1 passed/);
 });
+
+test("an exact skipped result remains skipped without claiming post-test observations", (t) => {
+  const r = summarize(t, (s) => {
+    s.results[0].status = "skipped";
+    delete s.results[0].shaAfter;
+    delete s.results[0].editorShaAfter;
+  });
+  assert.equal(r.code, 0, r.text);
+  assert.match(r.text, /1 skipped/);
+});
 for (const key of ["sha", "expectedSha", "editorSha", "expectedEditorSha", "source"]) {
   test(`a mismatched ${key} cannot be summarized as success`, (t) => {
     const r = summarize(t, (s) => {

@@ -8,7 +8,7 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 const vm = require("node:vm");
 
-function fixture(t) {
+function fixture(t, { hasSpecs = true } = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lumine-ci-inputs-"));
   assert.equal(path.dirname(temporary), path.resolve(os.tmpdir()));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
@@ -49,10 +49,11 @@ function fixture(t) {
       JSON.stringify({ name: "fixture-package", specPackages: [] }),
     );
   }
-  fs.mkdirSync(path.join(repository, "spec"));
-  fs.writeFileSync(path.join(repository, "spec", "example.js"), "planned bytes");
+  if (hasSpecs) fs.mkdirSync(path.join(repository, "spec"));
+  const content = path.join(repository, hasSpecs ? "spec/example.js" : "fixture.txt");
+  fs.writeFileSync(content, "planned bytes");
   const plannedSha = commit(repository, "Planned package");
-  fs.writeFileSync(path.join(repository, "spec", "example.js"), "later branch bytes");
+  fs.writeFileSync(content, "later branch bytes");
   const laterSha = commit(repository, "Advance master after planning");
   const editorSha = commit(editor, "Editor input");
   const planFile = path.join(temporary, "plan.json");
@@ -218,6 +219,65 @@ test("a branch advancing after discovery still executes its planned immutable co
     r.events.find((e) => e.command === "git" && e.args[0] === "fetch").args.at(-1),
     f.plannedSha,
   );
+});
+
+test("the real producer's no-spec skip survives the actual workflow fallback unchanged", (t) => {
+  const f = fixture(t, { hasSpecs: false }),
+    r = execute(f);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.equal(r.launched, false);
+  assert.equal(r.report.status, "passed");
+  assert.equal(r.report.results[0].status, "skipped");
+  assert.equal(r.report.results[0].shaAfter, undefined);
+  assert.equal(r.report.results[0].editorShaAfter, undefined);
+  const raw = fs.readFileSync(r.output, "utf8");
+  const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/specs.yml"), "utf8");
+  const code = workflow
+    .match(/node <<'NODE'\r?\n([\s\S]*?)\r?\n[ \t]+NODE/)[1]
+    .split(/\r?\n/)
+    .map((line) => line.slice(10))
+    .join("\n");
+  const localPath = (file) => path.resolve(f.temporary, file);
+  const fixtureFs = {
+    ...fs,
+    ...Object.fromEntries(
+      ["readFileSync", "existsSync", "mkdirSync", "writeFileSync"].map((method) => [
+        method,
+        (file, ...args) => fs[method](localPath(file), ...args),
+      ]),
+    ),
+  };
+  const fake = {
+    env: {
+      RUNNER_OS: "Windows",
+      RUNNER_TEMP: f.temporary,
+      SPEC_PACKAGE: "fixture-package",
+      SPEC_EXPECTED_SHA: f.plannedSha,
+      SPEC_EXPECTED_SOURCE: "fixture/package",
+      SPEC_EXPECTED_EDITOR_SHA: f.editorSha,
+      SPEC_RUNNER_OUTCOME: "success",
+    },
+    platform: process.platform,
+    stderr: { write() {} },
+  };
+  vm.runInNewContext(code, {
+    require(name) {
+      if (name === "node:fs") return fixtureFs;
+      if (name === "node:path")
+        return { ...path, resolve: (...args) => path.resolve(f.temporary, ...args) };
+      if (name === "node:child_process")
+        return {
+          spawnSync() {
+            assert.fail("A retained skip needs no new process observation");
+          },
+        };
+      return require(name);
+    },
+    process: fake,
+  });
+  assert.equal(fake.exitCode || 0, 0);
+  assert.equal(fs.readFileSync(r.output, "utf8"), raw);
+  assert.equal(fs.readdirSync(path.dirname(r.output)).length, 1);
 });
 
 test("an observed package mismatch prevents dependency installation and specs", (t) => {
