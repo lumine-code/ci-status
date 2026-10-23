@@ -11,7 +11,27 @@ const vm = require("node:vm");
 function fixture(t, { hasSpecs = true, pretest } = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "lumine-ci-inputs-"));
   assert.equal(path.dirname(temporary), path.resolve(os.tmpdir()));
-  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  t.after(() => {
+    const alias = path.join(
+      temporary,
+      "workspace",
+      "home",
+      "fixture-package",
+      "packages",
+      "fixture-package",
+    );
+    try {
+      assert.ok(fs.lstatSync(alias).isSymbolicLink());
+      assert.equal(
+        fs.realpathSync(alias),
+        fs.realpathSync(path.join(temporary, "workspace", "checkout", "fixture-package")),
+      );
+      fs.unlinkSync(alias);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
+  });
   const git = (directory, args) => {
     const result = spawnSync(
       "git",
