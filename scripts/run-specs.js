@@ -2,7 +2,7 @@
 
 // Run one package or one local shard of the plan produced by `plan-specs.js`.
 //
-// Each package is cloned at its resolved ref, its dependencies installed, and
+// Each package is checked out at its planned commit, its dependencies installed, and
 // its Jasmine suite run inside the prebuilt editor checkout — the same
 // invocation every package's own CI uses, so a failure here means the same
 // thing it would there. Every checkout is discarded afterwards, which also keeps
@@ -11,6 +11,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 function parseArguments(argv) {
@@ -69,7 +70,10 @@ function run(command, args, cwd, env) {
   });
   if (result.error) return { code: 1, message: result.error.message };
   if (result.status !== 0) {
-    return { code: result.status === null ? 1 : result.status, message: `${command} failed` };
+    return {
+      code: result.status === null ? 1 : result.status,
+      message: `${command} failed`,
+    };
   }
   return { code: 0 };
 }
@@ -83,7 +87,11 @@ function bash() {
   if (resolvedBash) return resolvedBash;
   const candidates = ["bash"];
   if (process.platform === "win32") {
-    for (const base of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.ProgramW6432]) {
+    for (const base of [
+      process.env.ProgramFiles,
+      process.env["ProgramFiles(x86)"],
+      process.env.ProgramW6432,
+    ]) {
       if (base) candidates.push(path.join(base, "Git", "bin", "bash.exe"));
     }
   }
@@ -160,31 +168,22 @@ function withRetries(label, attempts, body) {
 }
 
 function checkout(entry, directory) {
-  remove(directory);
-  if (entry.refType === "commit") {
-    fs.mkdirSync(directory, { recursive: true });
-    const steps = [
-      ["init", "--quiet"],
-      ["remote", "add", "origin", entry.cloneUrl],
-      ["fetch", "--depth", "1", "--quiet", "origin", entry.ref],
-      ["checkout", "--quiet", "--detach", "FETCH_HEAD"],
-    ];
-    for (const args of steps) {
-      const result = run("git", args, directory);
-      if (result.code !== 0) return result;
-    }
-    return { code: 0 };
+  if (!/^[a-f0-9]{40}$/i.test(entry.sha || "")) {
+    return { code: 1, message: "the plan contains no full package commit SHA" };
   }
-  return run("git", [
-    "clone",
-    "--depth",
-    "1",
-    "--quiet",
-    "--branch",
-    entry.ref,
-    entry.cloneUrl,
-    directory,
-  ]);
+  remove(directory);
+  fs.mkdirSync(directory, { recursive: true });
+  const steps = [
+    ["init", "--quiet"],
+    ["remote", "add", "origin", entry.cloneUrl],
+    ["fetch", "--depth", "1", "--quiet", "origin", entry.sha],
+    ["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+  ];
+  for (const args of steps) {
+    const result = run("git", args, directory);
+    if (result.code !== 0) return result;
+  }
+  return { code: 0 };
 }
 
 // Not `--ignore-scripts`: npm's allow-scripts gate already blocks every
@@ -201,7 +200,10 @@ function install(directory) {
     : "install --no-audit --no-fund --no-package-lock";
   const result = shell(`npm ${args}`, directory);
   if (result.code === 0) return result;
-  return { ...result, message: result.message || `npm ${args.split(" ")[0]} failed` };
+  return {
+    ...result,
+    message: result.message || `npm ${args.split(" ")[0]} failed`,
+  };
 }
 
 // A `binding.gyp` is what marks a dependency as node-gyp native. Scoped
@@ -237,15 +239,16 @@ function rebuildNativeModules(directory, editorDirectory) {
   const native = findNativeModules(directory);
   if (native.length === 0) return { code: 0 };
 
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(editorDirectory, "package.json"), "utf8"),
-  );
+  const manifest = JSON.parse(fs.readFileSync(path.join(editorDirectory, "package.json"), "utf8"));
   const version = manifest.electronVersion;
   if (!version) return { code: 1, message: "the editor declares no electronVersion" };
 
   const binary = path.join(editorDirectory, "node_modules", ".bin", "electron-rebuild");
   if (!fs.existsSync(binary)) {
-    return { code: 1, message: "the editor has no electron-rebuild to build against" };
+    return {
+      code: 1,
+      message: "the editor has no electron-rebuild to build against",
+    };
   }
 
   const names = native.map((entry) => path.basename(entry)).join(", ");
@@ -255,7 +258,10 @@ function rebuildNativeModules(directory, editorDirectory) {
     directory,
   );
   if (result.code !== 0) {
-    return { ...result, message: result.message || `electron-rebuild failed for ${names}` };
+    return {
+      ...result,
+      message: result.message || `electron-rebuild failed for ${names}`,
+    };
   }
   return { code: 0 };
 }
@@ -273,7 +279,10 @@ function specPackagesOf(directory) {
 function installSpecPackages(directory, editorDirectory, home) {
   const script = path.join(editorDirectory, "script", "install-spec-packages.js");
   if (!fs.existsSync(script)) {
-    return { code: 1, message: "the editor has no install-spec-packages.js to provision with" };
+    return {
+      code: 1,
+      message: "the editor has no install-spec-packages.js to provision with",
+    };
   }
   // The script does its own clone and install retries, so no withRetries here.
   return run(process.execPath, [script, "--package", directory, "--home", home]);
@@ -307,9 +316,11 @@ function runSpecs(specDirectory, editorDirectory, options, environment) {
   return code === 0 ? { code: 0 } : { code, message: `specs failed (exit ${code})` };
 }
 
-function main() {
-  const options = parseArguments(process.argv.slice(2));
-  const plan = JSON.parse(fs.readFileSync(options.plan, "utf8"));
+function runPlan(options, report, save) {
+  const planBytes = fs.readFileSync(options.plan);
+  report.planSha256 = crypto.createHash("sha256").update(planBytes).digest("hex");
+  const plan = JSON.parse(planBytes);
+  report.expectedEditorSha = plan.editorSha ?? null;
   const editorDirectory = path.resolve(options.editor);
   const workspace = path.resolve(
     options.workspace || path.join(process.env.RUNNER_TEMP || os.tmpdir(), "lumine-specs"),
@@ -320,11 +331,38 @@ function main() {
   if (options.package && entries.length !== 1) {
     throw new Error(`The plan contains no unique package named ${options.package}.`);
   }
+  if (new Set(entries.map((entry) => entry.name)).size !== entries.length) {
+    throw new Error("The plan contains duplicate package names.");
+  }
 
   fs.mkdirSync(workspace, { recursive: true });
   fs.mkdirSync(path.dirname(path.resolve(options.out)), { recursive: true });
 
-  const results = [];
+  const results = report.results;
+  for (const entry of entries) {
+    results.push({
+      name: entry.name,
+      source: entry.source,
+      ref: entry.ref,
+      refType: entry.refType,
+      expectedSha: entry.sha,
+      sha: null,
+      expectedEditorSha: report.expectedEditorSha,
+      editorSha: report.editorSha,
+      platform: PLATFORM,
+      status: "pending",
+      message: null,
+    });
+  }
+  save();
+  if (!/^[a-f0-9]{40}$/i.test(report.expectedEditorSha || "")) {
+    throw new Error("The plan contains no full editor commit SHA.");
+  }
+  if (report.editorSha !== report.expectedEditorSha) {
+    throw new Error(
+      `Editor HEAD ${report.editorSha} does not match planned ${report.expectedEditorSha}.`,
+    );
+  }
   for (const entry of entries) {
     const directory = path.join(workspace, "checkout", entry.name);
     // A private LUMINE_HOME per package: nothing one suite writes to the config
@@ -332,117 +370,121 @@ function main() {
     const home = path.join(workspace, "home", entry.name);
     let exposedPackagePath = null;
     const startedAt = Date.now();
-    const record = {
-      name: entry.name,
-      source: entry.source,
-      ref: entry.ref,
-      refType: entry.refType,
-      sha: entry.sha,
-      platform: PLATFORM,
-      status: "passed",
-      message: null,
-    };
+    const record = results.find((result) => result.name === entry.name);
+    record.status = "running";
+    save();
 
-    group(`${entry.name} (${entry.refType} ${entry.ref})`, () => {
-      remove(home);
-      fs.mkdirSync(home, { recursive: true });
+    try {
+      group(`${entry.name} (${entry.refType} ${entry.ref}, planned ${entry.sha})`, () => {
+        remove(home);
+        fs.mkdirSync(home, { recursive: true });
 
-      const cloned = withRetries(`${entry.name} checkout`, 3, () => checkout(entry, directory));
-      if (cloned.code !== 0) {
-        record.status = "error";
-        record.message = `checkout failed: ${cloned.message}`;
-        return;
-      }
-      record.sha = capture("git", ["rev-parse", "HEAD"], directory) || entry.sha;
-
-      const specDirectory = path.join(directory, "spec");
-      if (!fs.existsSync(specDirectory)) {
-        record.status = "skipped";
-        record.message = "no spec directory";
-        return;
-      }
-
-      const installed = withRetries(`${entry.name} install`, 3, () => install(directory));
-      if (installed.code !== 0) {
-        record.status = "error";
-        record.message = `install failed: ${installed.message}`;
-        return;
-      }
-
-      const rebuilt = rebuildNativeModules(directory, editorDirectory);
-      if (rebuilt.code !== 0) {
-        record.status = "error";
-        record.message = `native rebuild failed: ${rebuilt.message}`;
-        return;
-      }
-
-      const specPackages = specPackagesOf(directory);
-      if (specPackages.length > 0) {
-        const provisioned = installSpecPackages(directory, editorDirectory, home);
-        if (provisioned.code !== 0) {
+        const cloned = withRetries(`${entry.name} checkout`, 3, () => checkout(entry, directory));
+        if (cloned.code !== 0) {
           record.status = "error";
-          record.message = `spec packages failed: ${provisioned.message}`;
+          record.message = `checkout failed: ${cloned.message}`;
           return;
         }
-      }
+        record.sha = capture("git", ["rev-parse", "HEAD"], directory);
+        if (record.sha !== entry.sha) {
+          record.status = "error";
+          record.message = `Package HEAD ${record.sha} does not match planned ${entry.sha}.`;
+          return;
+        }
+        process.stdout.write(`Inputs: package=${record.sha} editor=${report.editorSha}\n`);
+        save();
 
-      // The renderer loads the target from its spec path, but the main-process
-      // lumine:// asset handler resolves installed package directories. Expose
-      // this exact checkout there too, even when no spec neighbors are needed.
-      const { name } = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
-      const packagePath = path.join(home, "packages", name);
-      fs.mkdirSync(path.dirname(packagePath), { recursive: true });
-      fs.symlinkSync(directory, packagePath, process.platform === "win32" ? "junction" : "dir");
-      exposedPackagePath = packagePath;
+        const specDirectory = path.join(directory, "spec");
+        if (!fs.existsSync(specDirectory)) {
+          record.status = "skipped";
+          record.message = "no spec directory";
+          return;
+        }
 
-      const environment = {
-        ...process.env,
-        LUMINE_HOME: home,
-        LUMINE_JASMINE_REPORTER: "list",
-      };
-      if (specPackages.length > 0) {
-        environment.LUMINE_TEST_PACKAGES = specPackages.join(" ");
-      }
-      const specs = runSpecs(specDirectory, editorDirectory, options, environment);
-      if (specs.code !== 0) {
-        record.status = "failed";
-        record.message = specs.message;
-      }
-    });
+        const installed = withRetries(`${entry.name} install`, 3, () => install(directory));
+        if (installed.code !== 0) {
+          record.status = "error";
+          record.message = `install failed: ${installed.message}`;
+          return;
+        }
 
-    record.durationMs = Date.now() - startedAt;
-    results.push(record);
+        const rebuilt = rebuildNativeModules(directory, editorDirectory);
+        if (rebuilt.code !== 0) {
+          record.status = "error";
+          record.message = `native rebuild failed: ${rebuilt.message}`;
+          return;
+        }
+
+        const specPackages = specPackagesOf(directory);
+        if (specPackages.length > 0) {
+          const provisioned = installSpecPackages(directory, editorDirectory, home);
+          if (provisioned.code !== 0) {
+            record.status = "error";
+            record.message = `spec packages failed: ${provisioned.message}`;
+            return;
+          }
+        }
+
+        // The renderer loads the target from its spec path, but the main-process
+        // lumine:// asset handler resolves installed package directories. Expose
+        // this exact checkout there too, even when no spec neighbors are needed.
+        const { name } = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
+        const packagePath = path.join(home, "packages", name);
+        fs.mkdirSync(path.dirname(packagePath), { recursive: true });
+        fs.symlinkSync(directory, packagePath, process.platform === "win32" ? "junction" : "dir");
+        exposedPackagePath = packagePath;
+
+        const environment = {
+          ...process.env,
+          LUMINE_HOME: home,
+          LUMINE_JASMINE_REPORTER: "list",
+        };
+        if (specPackages.length > 0) {
+          environment.LUMINE_TEST_PACKAGES = specPackages.join(" ");
+        }
+        const specs = runSpecs(specDirectory, editorDirectory, options, environment);
+        if (specs.code !== 0) {
+          record.status = "failed";
+          record.message = specs.message;
+        } else {
+          record.status = "passed";
+        }
+        record.shaAfter = capture("git", ["rev-parse", "HEAD"], directory);
+        record.editorShaAfter = capture("git", ["rev-parse", "HEAD"], editorDirectory);
+        if (record.shaAfter !== entry.sha || record.editorShaAfter !== report.expectedEditorSha) {
+          record.status = "error";
+          record.message = "The package or editor HEAD changed during the spec run.";
+        }
+      });
+    } catch (error) {
+      record.status = "error";
+      record.message = error.message;
+    } finally {
+      // Reclaim the disk before another local package: a shard's worth of trees
+      // with their dependencies would otherwise fill the machine.
+      // Detach our package alias before deleting its target or either parent.
+      // Recursive cleanup must never need to traverse this checkout junction.
+      try {
+        if (exposedPackagePath) {
+          try {
+            fs.unlinkSync(exposedPackagePath);
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+          }
+        }
+        remove(home);
+        remove(directory);
+      } catch (error) {
+        record.status = "error";
+        record.message = `${record.message ? record.message + "; " : ""}cleanup failed: ${error.message}`;
+      }
+      record.durationMs = Date.now() - startedAt;
+      save();
+    }
     if (record.status === "failed" || record.status === "error") {
       process.stdout.write(`::error title=${entry.name}::${record.message}\n`);
     }
-    // Reclaim the disk before another local package: a shard's worth of trees
-    // with their dependencies would otherwise fill the machine.
-    // Detach our package alias before deleting its target or either parent.
-    // Recursive cleanup must never need to traverse this checkout junction.
-    if (exposedPackagePath) {
-      try {
-        fs.unlinkSync(exposedPackagePath);
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-      }
-    }
-    remove(home);
-    remove(directory);
   }
-
-  fs.writeFileSync(
-    path.resolve(options.out),
-    `${JSON.stringify(
-      {
-        package: options.package,
-        shard: options.package ? null : options.shard,
-        platform: PLATFORM,
-        results,
-      },
-      null,
-      2,
-    )}\n`,
-  );
 
   const failed = results.filter(
     (result) => result.status === "failed" || result.status === "error",
@@ -456,6 +498,49 @@ function main() {
     );
     // A local shard always writes every result and exits zero. The local driver
     // summarizes after all shards, so one broken package cannot hide a later one.
+  }
+}
+
+function main() {
+  const options = parseArguments(process.argv.slice(2));
+  const output = path.resolve(options.out);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  const report = {
+    schema: 2,
+    package: options.package,
+    shard: options.package ? null : options.shard,
+    platform: PLATFORM,
+    startedAt: new Date().toISOString(),
+    status: "running",
+    planSha256: null,
+    expectedEditorSha: null,
+    editorSha: capture("git", ["rev-parse", "HEAD"], path.resolve(options.editor)),
+    results: [],
+  };
+  const save = () => {
+    fs.writeFileSync(output + ".tmp", JSON.stringify(report, null, 2) + "\n");
+    fs.renameSync(output + ".tmp", output);
+  };
+  save();
+  try {
+    runPlan(options, report, save);
+    report.status = report.results.some((result) => ["failed", "error"].includes(result.status))
+      ? "failed"
+      : "passed";
+  } catch (error) {
+    report.status = "error";
+    report.message = error.message;
+    for (const record of report.results.filter((result) =>
+      ["pending", "running"].includes(result.status),
+    )) {
+      record.status = "error";
+      record.message = error.message;
+    }
+    process.stderr.write(`${error.stack || error.message}\n`);
+    process.exitCode = 1;
+  } finally {
+    report.completedAt = new Date().toISOString();
+    save();
   }
 }
 

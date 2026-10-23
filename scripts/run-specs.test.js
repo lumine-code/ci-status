@@ -31,6 +31,7 @@ for (const { neighbors, removeAlias } of scenarios) {
     fs.writeFileSync(
       plan,
       JSON.stringify({
+        editorSha: sha,
         packages: [
           {
             name: "checkout-name",
@@ -86,8 +87,11 @@ for (const { neighbors, removeAlias } of scenarios) {
     };
     const childProcess = {
       spawnSync(command, args, options = {}) {
-        if (command === "git" && args[0] === "clone") {
-          const checkout = args.at(-1);
+        if (command === "git" && ["init", "remote", "fetch"].includes(args[0])) {
+          return { status: 0 };
+        }
+        if (command === "git" && args[0] === "checkout") {
+          const checkout = options.cwd;
           fs.mkdirSync(path.join(checkout, "spec"), { recursive: true });
           fs.mkdirSync(path.join(checkout, "img"), { recursive: true });
           fs.writeFileSync(path.join(checkout, "package.json"), JSON.stringify(manifest));
@@ -102,7 +106,9 @@ for (const { neighbors, removeAlias } of scenarios) {
           args[0] === path.join(editor, "script", "install-spec-packages.js")
         ) {
           const home = args[args.indexOf("--home") + 1];
-          fs.mkdirSync(path.join(home, "packages", "neighbor-package"), { recursive: true });
+          fs.mkdirSync(path.join(home, "packages", "neighbor-package"), {
+            recursive: true,
+          });
           fs.writeFileSync(path.join(home, "packages", "neighbor-package", "keep.txt"), "neighbor");
           return { status: 0 };
         }

@@ -71,24 +71,59 @@ function main() {
   // but it belongs to no platform — it never reached one.
   const unresolved = reported.filter((result) => !result.platform);
   const results = reported.filter((result) => result.platform);
+  for (const result of results) {
+    if (!["passed", "failed", "error", "skipped"].includes(result.status)) {
+      result.status = "error";
+      result.message = "No terminal result was reported for this package.";
+    }
+  }
+  const artifactErrors = shards.filter((shard) => shard.status === "error");
+  const plan = options.plan ? JSON.parse(fs.readFileSync(options.plan, "utf8")) : null;
+  if (plan) {
+    if (!/^[a-f0-9]{40}$/i.test(plan.editorSha || ""))
+      throw new Error("The plan contains no full editor commit SHA.");
+    const expected = new Map((plan.packages || []).map((entry) => [entry.name, entry]));
+    for (const result of results) {
+      const entry = expected.get(result.name);
+      if (
+        !entry ||
+        result.source !== entry.source ||
+        result.sha !== entry.sha ||
+        result.expectedSha !== entry.sha ||
+        result.editorSha !== plan.editorSha ||
+        result.expectedEditorSha !== plan.editorSha
+      ) {
+        result.status = "error";
+        result.message = "The reported package/editor commits do not match the plan.";
+      }
+    }
+  }
 
-  const platforms = [...new Set(results.map((result) => result.platform))].sort();
+  const platforms = [
+    ...new Set([
+      ...results.map((result) => result.platform),
+      ...shards.map((shard) => shard.platform).filter(Boolean),
+    ]),
+  ].sort();
   const packages = new Map();
   for (const result of results) {
     if (!packages.has(result.name)) packages.set(result.name, { ref: result.ref, byPlatform: {} });
     const entry = packages.get(result.name);
     entry.ref = entry.ref || result.ref;
+    if (entry.byPlatform[result.platform]) {
+      result.status = "error";
+      result.message = "More than one result was reported for this package and platform.";
+    }
     entry.byPlatform[result.platform || "—"] = result;
   }
 
   // A package the plan listed but no shard reported on means a local run died or
   // was cancelled. Silence there would read as success, so name it.
   const missing = [];
-  if (options.plan && fs.existsSync(options.plan)) {
-    const plan = JSON.parse(fs.readFileSync(options.plan, "utf8"));
+  if (plan) {
     for (const entry of plan.packages || []) {
       const reported = packages.get(entry.name);
-      for (const platform of platforms) {
+      for (const platform of platforms.length ? platforms : ["unknown"]) {
         if (!reported || !reported.byPlatform[platform]) {
           missing.push({ name: entry.name, platform });
         }
@@ -157,6 +192,16 @@ function main() {
       "",
     );
   }
+  if (artifactErrors.length > 0) {
+    lines.push(
+      "### Incomplete result artifacts",
+      "",
+      ...artifactErrors.map(
+        (shard) => `- ${shard.package || shard.shard}: ${shard.message || "artifact failed"}`,
+      ),
+      "",
+    );
+  }
 
   const report = `${lines.join("\n")}\n`;
   process.stdout.write(report);
@@ -171,7 +216,8 @@ function main() {
   for (const entry of unresolved) {
     process.stdout.write(`::error title=${entry.name}::${entry.message}\n`);
   }
-  if (broken.length > 0 || missing.length > 0 || unresolved.length > 0) process.exitCode = 1;
+  if (broken.length > 0 || missing.length > 0 || unresolved.length > 0 || artifactErrors.length > 0)
+    process.exitCode = 1;
 }
 
 try {

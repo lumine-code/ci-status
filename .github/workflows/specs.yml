@@ -111,7 +111,7 @@ jobs:
           ONLY: ${{ inputs.packages }}
           PACKAGE_REF: ${{ inputs.package-ref || 'master' }}
         run: |
-          args=(--out plan.json --shards 1 --ref "$PACKAGE_REF")
+          args=(--out plan.json --shards 1 --ref "$PACKAGE_REF" --editor-sha "${{ steps.editor.outputs.sha }}")
           if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
           node scripts/plan-specs.js "${args[@]}"
       - uses: actions/upload-artifact@v7
@@ -263,6 +263,14 @@ jobs:
       - name: Run ${{ matrix.package }} specs
         shell: bash
         run: node scripts/run-specs.js --plan plan.json --package "${{ matrix.package }}" --editor lumine
+      - name: Upload the actual package and editor result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spec-result-${{ runner.os }}-${{ matrix.package }}
+          path: results/package-*.json
+          if-no-files-found: error
+          retention-days: 7
 
   specs-macos:
     name: ${{ matrix.package }} (macOS)

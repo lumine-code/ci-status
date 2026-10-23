@@ -84,9 +84,7 @@ function main() {
   const root = path.join(HERE, "..");
   const editor = path.resolve(root, options.editor);
   if (!fs.existsSync(path.join(editor, "package.json"))) {
-    throw new Error(
-      `No editor checkout at ${editor}. Pass --editor <path> to point at one.`,
-    );
+    throw new Error(`No editor checkout at ${editor}. Pass --editor <path> to point at one.`);
   }
 
   // A stale plan or a stale result file is the one way this pipeline lies:
@@ -101,7 +99,24 @@ function main() {
     });
   }
 
-  const planArgs = ["--out", options.plan, "--shards", String(options.shards), "--ref", options.ref];
+  const editorHead = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: editor,
+    encoding: "utf8",
+  });
+  const editorSha = String(editorHead.stdout || "").trim();
+  if (editorHead.status !== 0 || !/^[a-f0-9]{40}$/i.test(editorSha)) {
+    throw new Error("The editor must be a Git checkout with a full HEAD commit SHA.");
+  }
+  const planArgs = [
+    "--out",
+    options.plan,
+    "--shards",
+    String(options.shards),
+    "--ref",
+    options.ref,
+    "--editor-sha",
+    editorSha,
+  ];
   for (const pattern of options.only) planArgs.push("--only", pattern);
   if (step("plan-specs.js", planArgs) !== 0) {
     throw new Error("Planning failed; nothing was swept.");
@@ -117,14 +132,7 @@ function main() {
   // got through, then the summary decides the overall outcome. A shard that dies
   // outright is caught too, as a package nothing reported on.
   for (let shard = 0; shard < plan.shards; shard += 1) {
-    step("run-specs.js", [
-      "--plan",
-      options.plan,
-      "--shard",
-      String(shard),
-      "--editor",
-      editor,
-    ]);
+    step("run-specs.js", ["--plan", options.plan, "--shard", String(shard), "--editor", editor]);
   }
 
   process.exitCode = step("summarize-specs.js", [

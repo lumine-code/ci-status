@@ -31,6 +31,7 @@ function parseArguments(argv) {
     ref: "master",
     out: "plan.json",
     resultsOut: "results/unresolved.json",
+    editorSha: null,
     shards: 12,
     only: [],
     summary: process.env.GITHUB_STEP_SUMMARY || null,
@@ -47,6 +48,7 @@ function parseArguments(argv) {
     else if (argument === "--ref") options.ref = next();
     else if (argument === "--out") options.out = next();
     else if (argument === "--results-out") options.resultsOut = next();
+    else if (argument === "--editor-sha") options.editorSha = next();
     else if (argument === "--shards") options.shards = Number(next());
     else if (argument === "--only") options.only.push(...splitPatterns(next()));
     else throw new Error(`Unknown argument: ${argument}`);
@@ -154,6 +156,9 @@ function writeSummary(summaryPath, lines) {
 
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  if (options.editorSha !== null && !/^[a-f0-9]{40}$/i.test(options.editorSha)) {
+    throw new Error("--editor-sha must be a full commit SHA.");
+  }
   const org = options.org;
   const ref = options.ref;
 
@@ -164,13 +169,20 @@ async function main() {
 
   const inspected = await mapWithConcurrency(candidates, CONCURRENCY, async (name) => {
     const cloneUrl = `https://github.com/${org}/${name}.git`;
-    const entry = { source: `${org}/${name}`, repository: `${org}/${name}`, name, cloneUrl };
+    const entry = {
+      source: `${org}/${name}`,
+      repository: `${org}/${name}`,
+      name,
+      cloneUrl,
+    };
     try {
-      const manifest = await readManifest(org, name, ref);
-      // Not a package: no manifest at all, or one that claims no editor.
-      if (!manifest || !manifest.engines || !manifest.engines.lumine) return null;
+      const selectedManifest = await readManifest(org, name, ref);
+      if (!selectedManifest?.engines?.lumine) return null;
       const sha = await lsRemote(cloneUrl, ref);
       if (!sha) throw new Error(`The repository has no \`${ref}\` branch.`);
+      const manifest = await readManifest(org, name, sha);
+      // Not a package: no manifest at all, or one that claims no editor.
+      if (!manifest || !manifest.engines || !manifest.engines.lumine) return null;
       process.stdout.write(`${name} → ${ref} ${sha.slice(0, 12)}\n`);
       return { ...entry, ref, refType: "branch", sha };
     } catch (error) {
@@ -192,14 +204,23 @@ async function main() {
     entry.shard = index % shards;
   });
 
-  const plan = { org, ref, shards, packages, unresolved };
+  const plan = {
+    org,
+    ref,
+    editorSha: options.editorSha,
+    shards,
+    packages,
+    unresolved,
+  };
   fs.writeFileSync(options.out, `${JSON.stringify(plan, null, 2)}\n`);
 
   // Keep unresolved repositories in the local result stream as well as the
   // plan. CI fails its planning job for them after uploading the plan, while
   // local multi-package runs still consume this result in their final report.
   if (unresolved.length > 0) {
-    fs.mkdirSync(path.dirname(path.resolve(options.resultsOut)), { recursive: true });
+    fs.mkdirSync(path.dirname(path.resolve(options.resultsOut)), {
+      recursive: true,
+    });
     fs.writeFileSync(
       path.resolve(options.resultsOut),
       `${JSON.stringify(
