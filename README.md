@@ -2,7 +2,7 @@
 
 Run every lumine-code package's specs at master against a real editor build.
 
-This repository owns no packages; it reports on them. A red run here means a package regressed, never that this repository is broken.
+This repository owns no packages; its result artifacts distinguish package regressions from setup failures.
 
 ## Features
 
@@ -18,6 +18,10 @@ This repository owns no packages; it reports on them. A red run here means a pac
 Each package is swept at `master`, so this answers _does the fleet work as it stands today_. That is deliberately a different question from the one the install catalog's own checks answer, which is _does the ref a user would install work_ — the newest stable tag a repository publishes, and `master` only when it has never been tagged.
 
 The branch is a discovery selector: jobs fetch its recorded commit rather than resolving the branch again. `npm run spec -- --editor /path/to/lumine` records the local editor's HEAD in the plan; a manually produced plan needs `--editor-sha <full-sha>`. Result files retain the planned and observed package and editor commits, and a mismatch fails before the suite runs. Each CI job uploads its `spec-result-<platform>-<package>` artifact even when setup or specs fail.
+
+These receipts attest the primary package and editor commits. A package's `specPackages` peers are ordinary checkouts at `master`; their actual checkout commits are not recorded, so the runner does not attest a frozen dependency closure.
+
+Linux headless setup retains `xvfb`, `libsecret-1-0`, `fonts-noto-cjk` and normal recommended packages. Each source gets 90 seconds for authenticated metadata and 180 seconds for downloads; metadata or download failures on the configured source switch to official Ubuntu archive endpoints with the same signing configuration. Installation uses the authenticated cache without downloads, has a 180-second budget and is never retried. Commands have a further 10-second kill grace within a 15-minute setup step. Failure on both sources or during cached installation stops setup and retains an error result.
 
 After installing a package's dependencies, the runner executes its declared nonempty `pretest` script once with `npm run pretest`, before native rebuild and editor specs. A pretest failure records an error and stops that package's spec launch.
 

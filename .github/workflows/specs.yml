@@ -242,9 +242,8 @@ jobs:
           node-version: 24
       - name: Install headless-display dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update || true
-          sudo apt-get install -y xvfb libsecret-1-0 fonts-noto-cjk
+        timeout-minutes: 15
+        run: node scripts/install-headless-dependencies.js
       - name: Use HTTPS for GitHub git dependencies
         shell: bash
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
