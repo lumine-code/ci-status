@@ -58,13 +58,37 @@ function row(cells) {
   return `| ${cells.join(" | ")} |`;
 }
 
+function isUnresolvedPlanArtifact(shard) {
+  return (
+    shard.shard === "plan" &&
+    Object.keys(shard).every((key) => ["shard", "results"].includes(key)) &&
+    Array.isArray(shard.results) &&
+    shard.results.length > 0 &&
+    shard.results.every(
+      (result) =>
+        result.status === "error" &&
+        result.platform == null &&
+        result.ref === null &&
+        result.sha === null &&
+        typeof result.source === "string" &&
+        typeof result.message === "string",
+    )
+  );
+}
+
 function main() {
   const options = parseArguments(process.argv.slice(2));
   const shards = readShards(options.directory);
+  const artifactErrors = shards.filter(
+    (shard) => !isUnresolvedPlanArtifact(shard) && shard.status !== "passed",
+  );
   const reported = shards.flatMap((shard) =>
     (shard.results || []).map((result) => ({
       ...result,
       platform: result.platform || shard.platform,
+      ...(!isUnresolvedPlanArtifact(shard) && !["passed", "failed", "error"].includes(shard.status)
+        ? { status: "error", message: "No terminal artifact status was reported." }
+        : {}),
     })),
   );
   // The plan job reports an entry whose ref never resolved in the same shape,
@@ -77,11 +101,19 @@ function main() {
       result.message = "No terminal result was reported for this package.";
     }
   }
-  const artifactErrors = shards.filter((shard) => shard.status === "error");
   const plan = options.plan ? JSON.parse(fs.readFileSync(options.plan, "utf8")) : null;
   if (plan) {
     if (!/^[a-f0-9]{40}$/i.test(plan.editorSha || ""))
       throw new Error("The plan contains no full editor commit SHA.");
+    for (const shard of shards.filter((shard) => !isUnresolvedPlanArtifact(shard))) {
+      if (
+        shard.expectedEditorSha !== plan.editorSha ||
+        (shard.status === "passed" && shard.editorSha !== plan.editorSha)
+      ) {
+        if (!artifactErrors.includes(shard)) artifactErrors.push(shard);
+        shard.message = `${shard.message ? shard.message + "; " : ""}The artifact editor commits do not match the plan.`;
+      }
+    }
     const expected = new Map((plan.packages || []).map((entry) => [entry.name, entry]));
     for (const result of results) {
       const entry = expected.get(result.name);
@@ -91,10 +123,12 @@ function main() {
         result.sha !== entry.sha ||
         result.expectedSha !== entry.sha ||
         result.editorSha !== plan.editorSha ||
-        result.expectedEditorSha !== plan.editorSha
+        result.expectedEditorSha !== plan.editorSha ||
+        (result.status === "passed" &&
+          (result.shaAfter !== entry.sha || result.editorShaAfter !== plan.editorSha))
       ) {
         result.status = "error";
-        result.message = "The reported package/editor commits do not match the plan.";
+        result.message = `${result.message ? result.message + "; " : ""}The reported package/editor commits do not match the plan.`;
       }
     }
   }

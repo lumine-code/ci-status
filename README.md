@@ -19,6 +19,8 @@ Each package is swept at `master`, so this answers *does the fleet work as it st
 
 The branch is a discovery selector: jobs fetch its recorded commit rather than resolving the branch again. `npm run spec -- --editor /path/to/lumine` records the local editor's HEAD in the plan; a manually produced plan needs `--editor-sha <full-sha>`. Result files retain the planned and observed package and editor commits, and a mismatch fails before the suite runs. Each CI job uploads its `spec-result-<platform>-<package>` artifact even when setup or specs fail.
 
+If setup stops before the runner, an always-run fallback records an error with the expected commits and any commit metadata it can still observe. Unknown observations stay null, test execution remains unattested, and any earlier runner report is preserved.
+
 It is also the only place a bundled package is tested at `master`. The editor's own CI runs each bundled package's suite at the commit the editor pins, so a package whose `master` has moved past its pin goes untested there until someone repins it.
 
 ## Contributing

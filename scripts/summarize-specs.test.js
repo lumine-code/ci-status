@@ -19,6 +19,8 @@ function summarize(t, change = () => {}) {
   const shard = {
     platform: "Windows",
     status: "passed",
+    expectedEditorSha: editorSha,
+    editorSha,
     results: [
       {
         name: "fixture",
@@ -26,8 +28,10 @@ function summarize(t, change = () => {}) {
         platform: "Windows",
         status: "passed",
         sha,
+        shaAfter: sha,
         expectedSha: sha,
         editorSha,
+        editorShaAfter: editorSha,
         expectedEditorSha: editorSha,
       },
     ],
@@ -111,3 +115,61 @@ test("a plan without an editor binding cannot accept results", (t) => {
   assert.equal(r.code, 1);
   assert.match(r.text, /no full editor commit/);
 });
+
+for (const status of ["running", "failed", undefined]) {
+  test(`a ${status ?? "missing"} artifact status cannot authenticate passed records`, (t) => {
+    const r = summarize(t, (s) => {
+      if (status === undefined) delete s.status;
+      else s.status = status;
+    });
+    assert.equal(r.code, 1);
+    assert.match(r.text, /Incomplete result artifacts/);
+  });
+}
+
+for (const key of ["shaAfter", "editorShaAfter"]) {
+  for (const missing of [false, true]) {
+    test(`a passed result requires ${missing ? "present" : "matching"} ${key}`, (t) => {
+      const r = summarize(t, (s) => {
+        if (missing) delete s.results[0][key];
+        else s.results[0][key] = "wrong";
+      });
+      assert.equal(r.code, 1);
+      assert.match(r.text, /do not match the plan/);
+    });
+  }
+}
+
+test("the explicit unresolved-plan artifact remains a visible planning error", (t) => {
+  const r = summarize(t, (s, p) => {
+    delete s.platform;
+    delete s.status;
+    delete s.expectedEditorSha;
+    delete s.editorSha;
+    s.shard = "plan";
+    s.results = [
+      {
+        name: "fixture",
+        source: "fixture/repository",
+        ref: null,
+        sha: null,
+        status: "error",
+        message: "unresolved",
+      },
+    ];
+    p.packages = [];
+  });
+  assert.equal(r.code, 1);
+  assert.match(r.text, /Unresolved catalog entries/);
+  assert.doesNotMatch(r.text, /Incomplete result artifacts/);
+});
+
+for (const key of ["editorSha", "expectedEditorSha"]) {
+  test(`a passed artifact requires a matching top-level ${key}`, (t) => {
+    const r = summarize(t, (s) => {
+      s[key] = "wrong";
+    });
+    assert.equal(r.code, 1);
+    assert.match(r.text, /artifact editor commits do not match/);
+  });
+}

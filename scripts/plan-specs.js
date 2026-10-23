@@ -243,6 +243,14 @@ async function main() {
 
   writeOutput("count", packages.length);
   writeOutput("packages", JSON.stringify(packages.map((entry) => entry.name)));
+  writeOutput(
+    "package-inputs",
+    JSON.stringify(
+      Object.fromEntries(
+        packages.map((entry) => [entry.name, { sha: entry.sha, source: entry.source }]),
+      ),
+    ),
+  );
   writeOutput("unresolved", unresolved.length);
   writeOutput("shards", JSON.stringify(Array.from({ length: shards }, (unused, index) => index)));
   writeSummary(options.summary, [

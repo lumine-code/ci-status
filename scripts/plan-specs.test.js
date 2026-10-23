@@ -25,7 +25,7 @@ async function plan(t, editorSha, packageAtPin = true) {
       "--editor-sha",
       editorSha,
     ],
-    env: {},
+    env: { GITHUB_OUTPUT: path.join(root, "github-output") },
     stdout: { write() {} },
     stderr: {
       write(s) {
@@ -80,6 +80,9 @@ async function plan(t, editorSha, packageAtPin = true) {
     stderr,
     code: fake.exitCode || 0,
     plan: fs.existsSync(output) ? JSON.parse(fs.readFileSync(output, "utf8")) : null,
+    githubOutput: fs.existsSync(fake.env.GITHUB_OUTPUT)
+      ? fs.readFileSync(fake.env.GITHUB_OUTPUT, "utf8")
+      : "",
   };
 }
 
@@ -92,6 +95,12 @@ test("discovery classifies the manifest at the resolved immutable package SHA", 
   assert.equal(r.plan.packages[0].ref, "master");
   assert.equal(r.calls[2], "resolve");
   assert.ok(r.calls[3].includes(`/${r.sha}/package.json`));
+  const packageInputs = r.githubOutput
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("package-inputs="));
+  assert.deepEqual(JSON.parse(packageInputs.slice("package-inputs=".length)), {
+    package: { sha: r.sha, source: "fixture/package" },
+  });
 });
 
 test("a manifest that is no longer a package at the resolved commit is not swept", async (t) => {

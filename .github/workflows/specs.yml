@@ -64,6 +64,7 @@ jobs:
     outputs:
       count: ${{ steps.plan.outputs.count }}
       packages: ${{ steps.plan.outputs.packages }}
+      package-inputs: ${{ steps.plan.outputs.package-inputs }}
       platforms: ${{ steps.platforms.outputs.list }}
       unresolved: ${{ steps.plan.outputs.unresolved }}
       editor-sha: ${{ steps.editor.outputs.sha }}
@@ -261,8 +262,74 @@ jobs:
           fi
           rm -f lumine-editor.tar.*
       - name: Run ${{ matrix.package }} specs
+        id: package_specs
         shell: bash
         run: node scripts/run-specs.js --plan plan.json --package "${{ matrix.package }}" --editor lumine
+      - name: Retain an error receipt when setup or the runner did not finish
+        if: always()
+        shell: bash
+        env:
+          SPEC_PACKAGE: ${{ matrix.package }}
+          SPEC_EXPECTED_SHA: ${{ fromJSON(needs.plan.outputs.package-inputs)[matrix.package].sha }}
+          SPEC_EXPECTED_SOURCE: ${{ fromJSON(needs.plan.outputs.package-inputs)[matrix.package].source }}
+          SPEC_EXPECTED_EDITOR_SHA: ${{ needs.plan.outputs.editor-sha }}
+          SPEC_RUNNER_OUTCOME: ${{ steps.package_specs.outcome }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+          const { spawnSync } = require('node:child_process');
+          const crypto = require('node:crypto');
+          function retainResult() {
+            const name = process.env.SPEC_PACKAGE;
+            const platform = process.env.RUNNER_OS || process.platform;
+            const expectedSha = process.env.SPEC_EXPECTED_SHA || null;
+            const expectedEditorSha = process.env.SPEC_EXPECTED_EDITOR_SHA || null;
+            const source = process.env.SPEC_EXPECTED_SOURCE || null;
+            const outcome = process.env.SPEC_RUNNER_OUTCOME || 'not-started';
+            const output = path.join('results', `package-${platform.toLowerCase()}-${name}.json`);
+            let existing = null;
+            try { existing = JSON.parse(fs.readFileSync(output, 'utf8')); } catch {}
+            const record = existing?.results?.length === 1 ? existing.results[0] : null;
+            const validExpected = /^[a-f0-9]{40}$/i.test(expectedSha || '') &&
+              /^[a-f0-9]{40}$/i.test(expectedEditorSha || '') &&
+              typeof source === 'string' && source.length > 0;
+            const identity = validExpected && existing && record && existing.package === name && existing.expectedEditorSha === expectedEditorSha &&
+              record.name === name && record.source === source && record.expectedSha === expectedSha &&
+              record.expectedEditorSha === expectedEditorSha;
+            const passedInputs = existing?.editorSha === expectedEditorSha &&
+              record?.sha === expectedSha && record.shaAfter === expectedSha &&
+              record.editorSha === expectedEditorSha && record.editorShaAfter === expectedEditorSha;
+            if (identity && ['passed', 'failed', 'error'].includes(existing.status) &&
+                (existing.status !== 'passed' || (outcome === 'success' && passedInputs))) {
+              if (existing.status !== 'passed') process.exitCode = 1;
+              return;
+            }
+            function observedSha(directory) {
+              if (!fs.existsSync(path.join(directory, '.git'))) return null;
+              const result = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: directory, encoding: 'utf8' });
+              const sha = String(result.stdout || '').trim();
+              return result.status === 0 && /^[a-f0-9]{40}$/i.test(sha) ? sha : null;
+            }
+            const editorSha = observedSha(path.resolve('lumine'));
+            const workspace = path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'lumine-specs');
+            const sha = observedSha(path.join(workspace, 'checkout', name));
+            let planSha256 = null;
+            try { planSha256 = crypto.createHash('sha256').update(fs.readFileSync('plan.json')).digest('hex'); } catch {}
+            const message = `Runner outcome: ${outcome}; no verified terminal result was retained.`;
+            const fallback = fs.existsSync(output) ? output.replace(/\.json$/, '.setup-error.json') : output;
+            const receipt = {
+              schema: 2, package: name, platform, status: 'error', phase: 'setup-or-interrupted-runner',
+              completedAt: new Date().toISOString(), expectedEditorSha, editorSha, planSha256,
+              testExecution: 'not-attested', runnerOutcome: outcome, message,
+              results: [{ name, source, platform, status: 'error', expectedSha, sha, expectedEditorSha, editorSha, message }]
+            };
+            fs.mkdirSync(path.dirname(fallback), { recursive: true });
+            fs.writeFileSync(fallback, JSON.stringify(receipt, null, 2) + '\n', { flag: 'wx' });
+            process.stderr.write(message + '\n');
+            process.exitCode = 1;
+          }
+          retainResult();
+          NODE
       - name: Upload the actual package and editor result
         if: always()
         uses: actions/upload-artifact@v7
