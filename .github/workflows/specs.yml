@@ -265,6 +265,8 @@ jobs:
       - name: Run ${{ matrix.package }} specs
         id: package_specs
         shell: bash
+        env:
+          LUMINE_TEST_GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/run-specs.js --plan plan.json --package "${{ matrix.package }}" --editor lumine
       - name: Retain an error receipt when setup or the runner did not finish
         if: always()
