@@ -457,13 +457,81 @@ test("a malformed plan still emits a failed job artifact instead of a stale succ
 });
 
 test("the shared workflow uploads each platform/package result even after a failed step", () => {
-  const workflow = fs.readFileSync(path.join(__dirname, "../.github/workflows/specs.yml"), "utf8");
+  const workflow = fs
+    .readFileSync(
+      path.join(__dirname, "../.github/workflows/specs.yml"),
+      "utf8",
+    )
+    .replaceAll("\r\n", "\n");
+  const firstStart = workflow.indexOf(
+    "      - name: Upload the actual package and editor result\n",
+  );
+  const waitStart = workflow.indexOf(
+    "      - name: Wait before retrying the result upload\n",
+  );
+  const retryStart = workflow.indexOf(
+    "      - name: Retry uploading the actual package and editor result\n",
+  );
+  const end = workflow.indexOf("\n  specs-macos:", retryStart);
+  assert.ok(
+    firstStart >= 0 &&
+      firstStart < waitStart &&
+      waitStart < retryStart &&
+      retryStart < end,
+  );
+  const first = workflow.slice(firstStart, waitStart);
+  const wait = workflow.slice(waitStart, retryStart);
+  const retry = workflow.slice(retryStart, end);
+  assert.match(first, /^        id: upload_result$/m);
+  assert.match(first, /^        if: always\(\)$/m);
+  assert.match(first, /^        continue-on-error: true$/m);
+  const retryCondition =
+    /^        if: always\(\) && steps\.upload_result\.outcome == 'failure'$/m;
+  assert.match(wait, retryCondition);
+  assert.match(
+    wait,
+    /^        run: node -e "setTimeout\(\(\) => \{\}, 10000\)"$/m,
+  );
+  assert.match(retry, retryCondition);
+  assert.doesNotMatch(retry, /continue-on-error:|^        run:/m);
+  assert.match(retry, /^          overwrite: true$/m);
+  for (const upload of [first, retry]) {
+    assert.equal(
+      (upload.match(/uses: actions\/upload-artifact@v7/g) || []).length,
+      1,
+    );
+    assert.match(
+      upload,
+      /^          name: spec-result-\$\{\{ runner\.os \}\}-\$\{\{ matrix\.package \}\}$/m,
+    );
+    assert.match(
+      upload,
+      /^          path: results\/package-\*\.json\n          if-no-files-found: error$/m,
+    );
+    assert.match(upload, /^          retention-days: 7$/m);
+  }
+  assert.equal(
+    (
+      workflow
+        .slice(firstStart, end)
+        .match(/uses: actions\/upload-artifact@v7/g) || []
+    ).length,
+    2,
+  );
+  assert.equal(
+    (workflow.match(/run: node scripts\/run-specs\.js /g) || []).length,
+    1,
+  );
+  const receiptStart = workflow.indexOf(
+    "      - name: Retain an error receipt when setup or the runner did not finish\n",
+  );
+  assert.ok(receiptStart >= 0 && receiptStart < firstStart);
   assert.match(
     workflow,
-    /Upload the actual package and editor result\s+if: always\(\)\s+uses: actions\/upload-artifact@v7/,
+    /--editor-sha "\$\{\{ steps\.editor\.outputs\.sha \}\}"/,
   );
-  assert.match(workflow, /name: spec-result-\$\{\{ runner\.os \}\}-\$\{\{ matrix\.package \}\}/);
-  assert.match(workflow, /path: results\/package-\*\.json\s+if-no-files-found: error/);
-  assert.match(workflow, /--editor-sha "\$\{\{ steps\.editor\.outputs\.sha \}\}"/);
-  assert.equal((workflow.match(/steps: \*package-spec-steps/g) || []).length, 2);
+  assert.equal(
+    (workflow.match(/steps: \*package-spec-steps/g) || []).length,
+    2,
+  );
 });
