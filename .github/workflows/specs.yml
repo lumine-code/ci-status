@@ -337,13 +337,31 @@ jobs:
           retainResult();
           NODE
       - name: Upload the actual package and editor result
+        id: upload_result
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: spec-result-${{ runner.os }}-${{ matrix.package }}
           path: results/package-*.json
           if-no-files-found: error
           retention-days: 7
+      # CreateArtifact can fail on transient DNS or connection errors before
+      # the action's HTTP retries apply. Retry the retained receipt once; the
+      # second upload stays strict, and neither step reruns the package specs.
+      - name: Wait before retrying the result upload
+        if: always() && steps.upload_result.outcome == 'failure'
+        shell: bash
+        run: node -e "setTimeout(() => {}, 10000)"
+      - name: Retry uploading the actual package and editor result
+        if: always() && steps.upload_result.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: spec-result-${{ runner.os }}-${{ matrix.package }}
+          path: results/package-*.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
   specs-macos:
     name: ${{ matrix.package }} (macOS)
