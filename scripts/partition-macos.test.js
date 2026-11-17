@@ -115,12 +115,12 @@ function enabled(block, index, options = {}) {
     needs = {
       plan: {
         outputs: {
-          count: "245",
+          count: options.count ?? "245",
           "macos-platforms": options.macos ?? '["macos-26-intel"]',
           [`macos-wave-${index}`]: options.wave ?? '["package"]',
         },
       },
-      editor: { result: "success" },
+      "editor-macos": { result: options.editor ?? "success" },
       [`specs-macos-${index - 1}`]: { result: options.previous ?? "success" },
     };
   return vm.runInNewContext(expression, {
@@ -137,8 +137,8 @@ test("four actual Mac matrices preserve the shared package steps and eligibility
     const block = waveBlock(index),
       expectedNeeds =
         index === 1
-          ? "[plan, editor]"
-          : `[plan, editor, specs-macos-${index - 1}]`;
+          ? "[plan, editor-macos]"
+          : `[plan, editor-macos, specs-macos-${index - 1}]`;
     assert(block.includes("needs: " + expectedNeeds));
     assert(block.includes("name: ${{ matrix.package }} (macOS)"));
     assert(block.includes("timeout-minutes: 60"));
@@ -167,6 +167,7 @@ test("a genuine preceding wave failure does not skip later non-cancelled coverag
     assert(block.includes("!cancelled()"));
     assert.equal(enabled(block, index, { previous: "failure" }), true);
     assert.equal(enabled(block, index, { previous: "skipped" }), true);
+    assert.equal(enabled(block, index, { editor: "failure" }), true);
     assert.equal(
       enabled(block, index, { previous: "failure", cancelled: true }),
       false,
@@ -181,6 +182,7 @@ test("empty waves and manual non-macOS subsets stop before expanding their matri
     assert.equal(enabled(block, index, { wave: "" }), false);
     assert.equal(enabled(block, index, { macos: "[]" }), false);
     assert.equal(enabled(block, index, { macos: "" }), false);
+    assert.equal(enabled(block, index, { count: "" }), false);
     assert.equal(enabled(block, index, { macos: '["macos-latest"]' }), true);
   }
 });

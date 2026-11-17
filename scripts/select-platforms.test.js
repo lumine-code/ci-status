@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
 const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 const { DEFAULT_PLATFORMS, selectPlatforms } = require("./select-platforms");
@@ -125,36 +126,100 @@ test("an ambiguous manual selection fails before publishing any matrix outputs",
   assert.equal(fs.existsSync(output), false);
 });
 
-test("the actual workflow uses matching selected runner labels for editor and package artifacts", () => {
-  const workflow = fs
-    .readFileSync(
-      path.join(__dirname, "../.github/workflows/specs.yml"),
-      "utf8",
-    )
-    .replace(/\r\n/g, "\n");
+const workflow = fs
+  .readFileSync(path.join(__dirname, "../.github/workflows/specs.yml"), "utf8")
+  .replace(/\r\n/g, "\n");
+
+function job(name) {
+  const sections = workflow.split(`  ${name}:\n`);
+  assert.equal(sections.length, 2, name);
+  return sections[1].split(/^  [a-zA-Z0-9-]+:/m)[0];
+}
+
+test("each package matrix waits for its own editor build and uses its artifact", () => {
   assert(workflow.includes("default: " + DEFAULT_PLATFORMS.join(",")));
   assert(workflow.includes("run: node scripts/select-platforms.js"));
   assert(
     workflow.includes("macos-platforms: ${{ steps.platforms.outputs.macos }}"),
   );
-  assert(
-    workflow.includes("os: ${{ fromJSON(needs.plan.outputs.platforms) }}"),
-  );
+  const editorLinux = job("editor-linux");
+  assert(editorLinux.includes("steps: &editor-build-steps"));
+  assert(editorLinux.includes("ref: ${{ needs.plan.outputs.editor-sha }}"));
+  assert(editorLinux.includes("name: spec-plan"));
+  assert(editorLinux.includes("name: lumine-editor-${{ matrix.os }}"));
+  assert(job("editor-windows").includes("steps: *editor-build-steps"));
+  assert(job("editor-macos").includes("steps: *editor-build-steps"));
+  for (const [platform, runner] of [
+    ["linux", "ubuntu-latest"],
+    ["windows", "windows-latest"],
+  ]) {
+    const editor = job(`editor-${platform}`);
+    const specs = job(`specs-${platform}`);
+    assert.match(editor, /^    needs: plan$/m);
+    assert(specs.includes(`needs: [plan, editor-${platform}]`));
+    assert(editor.includes(`os: [${runner}]`));
+    assert(specs.includes(`os: [${runner}]`));
+  }
+  const macosMatrix = "os: ${{ fromJSON(needs.plan.outputs.macos-platforms) }}";
+  assert(job("editor-macos").includes(macosMatrix));
   for (let index = 1; index <= 4; index++) {
-    const sections = workflow.split(`  specs-macos-${index}:\n`);
-    assert.equal(sections.length, 2);
-    const macos = sections[1].split(/^  [a-zA-Z0-9-]+:/m)[0];
+    const macos = job(`specs-macos-${index}`);
     assert(macos.includes("needs.plan.outputs.macos-platforms != ''"));
     assert(macos.includes("needs.plan.outputs.macos-platforms != '[]'"));
-    assert(
-      macos.includes("os: ${{ fromJSON(needs.plan.outputs.macos-platforms) }}"),
-    );
+    assert(macos.includes(macosMatrix));
     assert(macos.includes("steps: *package-spec-steps"));
   }
-  const editor = workflow.split("  editor:\n")[1].split("  specs-linux:\n")[0];
-  const packageSteps = workflow
-    .split("steps: &package-spec-steps\n")[1]
-    .split("  specs-macos-1:\n")[0];
-  assert(editor.includes("name: lumine-editor-${{ matrix.os }}"));
-  assert(packageSteps.includes("name: lumine-editor-${{ matrix.os }}"));
+  assert(job("specs-linux").includes("name: lumine-editor-${{ matrix.os }}"));
+});
+
+test("the editor builds and package jobs preserve platform and plan eligibility", () => {
+  function enabled(jobName, selected, count = "2", cancelled = false) {
+    const condition = job(jobName).match(/^    if: \$\{\{ (.*) \}\}$/m);
+    assert(condition, jobName);
+    return vm.runInNewContext(
+      condition[1].replaceAll(
+        "outputs.macos-platforms",
+        'outputs["macos-platforms"]',
+      ),
+      {
+        needs: {
+          plan: {
+            outputs: {
+              count,
+              platforms: selected ? JSON.stringify(selected) : "",
+              "macos-platforms": selected
+                ? JSON.stringify(
+                    selected.filter((runner) => runner.startsWith("macos-")),
+                  )
+                : "",
+            },
+          },
+        },
+        fromJSON: JSON.parse,
+        contains: (list, label) => list.includes(label),
+        cancelled: () => cancelled,
+      },
+    );
+  }
+
+  for (const [platform, runners] of [
+    ["linux", ["ubuntu-latest"]],
+    ["macos", ["macos-latest", "macos-26-intel"]],
+    ["windows", ["windows-latest"]],
+  ]) {
+    const jobs = [`editor-${platform}`];
+    if (platform !== "macos") jobs.push(`specs-${platform}`);
+    const otherRunners = DEFAULT_PLATFORMS.filter(
+      (runner) => !runners.includes(runner),
+    );
+    for (const jobName of jobs) {
+      for (const runner of runners)
+        assert.equal(enabled(jobName, [runner]), true);
+      assert.equal(enabled(jobName, DEFAULT_PLATFORMS), true);
+      assert.equal(enabled(jobName, otherRunners), false);
+      assert.equal(enabled(jobName, DEFAULT_PLATFORMS, "0"), false);
+      assert.equal(enabled(jobName, null, ""), false);
+      assert.equal(enabled(jobName, DEFAULT_PLATFORMS, "2", true), false);
+    }
+  }
 });
