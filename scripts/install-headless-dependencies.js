@@ -44,10 +44,19 @@ function officialUri(uri) {
       "azure.archive.ubuntu.com",
       "security.ubuntu.com",
     ].includes(host) ||
-      /^[a-z]{2}\.archive\.ubuntu\.com$/.test(host))
+      /^[a-z]{2}\.archive\.ubuntu\.com$/.test(host) ||
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:ec2|clouds)\.archive\.ubuntu\.com$/.test(
+        host,
+      ))
   )
     return host === "security.ubuntu.com" ? "security" : "archive";
-  if (host === "ports.ubuntu.com" && pathname === "/ubuntu-ports")
+  if (
+    pathname === "/ubuntu-ports" &&
+    (host === "ports.ubuntu.com" ||
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:ec2|clouds)\.ports\.ubuntu\.com$/.test(
+        host,
+      ))
+  )
     return "ports";
   return null;
 }
@@ -83,7 +92,10 @@ function mirrorList(text) {
     const kind = officialUri(line.split(/\s/)[0]);
     return kind && kind !== "mirrorlist";
   });
-  requireValue(selected.length > 0, "No official Ubuntu endpoint in mirror list");
+  requireValue(
+    selected.length > 0,
+    "No official Ubuntu endpoint in mirror list",
+  );
   return selected.length === active.length ? text : selected.join("\n") + "\n";
 }
 function usesRunnerMirrorList(files) {

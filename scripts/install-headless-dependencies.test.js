@@ -455,3 +455,126 @@ test("recognized false trust overrides are retained while unknown values fail cl
       /unsupported trust value/,
     );
 });
+
+test("Canonical cloud-init mirrors retain signed source fields and use the matching official fallback", () => {
+  // Documented cloud-init endpoints, not a recovered failed runner filesystem.
+  for (const [uri, kind] of [
+    ["http://us-west-2.ec2.archive.ubuntu.com/ubuntu/", "archive"],
+    ["https://us-west-2a.clouds.archive.ubuntu.com/ubuntu", "archive"],
+    ["http://us-west-2.ec2.ports.ubuntu.com/ubuntu-ports/", "ports"],
+    ["https://us-west-2a.clouds.ports.ubuntu.com/ubuntu-ports", "ports"],
+  ]) {
+    const text = source
+      .replace("mirror+file:/etc/apt/apt-mirrors.txt", uri)
+      .replace(
+        "Architectures: amd64v3",
+        kind === "ports" ? "Architectures: armhf" : "Architectures: amd64v3",
+      );
+    assert.equal(p.officialUri(uri), kind, uri);
+    assert.equal(
+      p.selectSources([{ name: "ubuntu.sources", text }], "unused").sources,
+      text + "\n",
+      uri,
+    );
+    const fallback =
+      kind === "ports"
+        ? "https://ports.ubuntu.com/ubuntu-ports"
+        : "https://archive.ubuntu.com/ubuntu";
+    assert.equal(
+      p.selectSources([{ name: "ubuntu.sources", text }], "unused", true)
+        .sources,
+      text.replace(uri, fallback) + "\n",
+      uri,
+    );
+  }
+});
+
+test("cloud mirrors work in legacy signed sources and preserve runner mirror priorities", () => {
+  const uri = "http://us-west-2.ec2.archive.ubuntu.com/ubuntu/";
+  const text =
+    "deb [arch=amd64v3 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] " +
+    uri +
+    " resolute main universe";
+  const cloudMirrors =
+    uri + "\tpriority:1\nhttps://archive.ubuntu.com/ubuntu\tpriority:2\n";
+  assert.equal(p.mirrorList(cloudMirrors), cloudMirrors);
+  assert.equal(
+    p.selectSources([{ name: "ubuntu.list", text }], "unused").list,
+    text + "\n",
+  );
+  assert.equal(
+    p.selectSources([{ name: "ubuntu.list", text }], "unused", true).list,
+    text.replace(uri, "https://archive.ubuntu.com/ubuntu") + "\n",
+  );
+});
+
+test("cloud mirror recognition rejects lookalikes, invalid labels, credentials and mismatched paths", () => {
+  const invalid = [
+    "https://us-west-2.ec2.archive.ubuntu.com.evil.test/ubuntu",
+    "https://nested.us-west-2.ec2.archive.ubuntu.com/ubuntu",
+    "https://us-west-2.ec2.archive.ubuntu.com@evil.test/ubuntu",
+    "https://user:password@us-west-2.ec2.archive.ubuntu.com/ubuntu",
+    "https://us-west-2.ec2.archive.ubuntu.com:8443/ubuntu",
+    "https://us-west-2.ec2.archive.ubuntu.com/ubuntu?trusted=yes",
+    "https://us-west-2.ec2.archive.ubuntu.com/ubuntu#archive",
+    "https://-us-west-2.ec2.archive.ubuntu.com/ubuntu",
+    "https://us-west-2-.ec2.archive.ubuntu.com/ubuntu",
+    "https://" + "a".repeat(64) + ".ec2.archive.ubuntu.com/ubuntu",
+    "https://ec2.archive.ubuntu.com/ubuntu",
+    "https://us-west-2.ec2.archive.ubuntu.com/ubuntu-ports",
+    "https://us-west-2a.clouds.ports.ubuntu.com/ubuntu",
+  ];
+  for (const uri of invalid) {
+    assert.equal(p.officialUri(uri), null, uri);
+    assert.throws(
+      () =>
+        p.selectSources(
+          [
+            {
+              name: "ubuntu.sources",
+              text: source.replace(
+                "mirror+file:/etc/apt/apt-mirrors.txt",
+                "https://archive.ubuntu.com/ubuntu " + uri,
+              ),
+            },
+          ],
+          "unused",
+          true,
+        ),
+      /Mixed Ubuntu and third-party/,
+      uri,
+    );
+  }
+});
+
+test("selected cloud archives cannot bypass signature validation through trust overrides", () => {
+  const uri = "http://us-west-2.ec2.archive.ubuntu.com/ubuntu/";
+  assert.throws(
+    () =>
+      p.selectSources(
+        [
+          {
+            name: "ubuntu.sources",
+            text:
+              source.replace("mirror+file:/etc/apt/apt-mirrors.txt", uri) +
+              "Trusted: yes\n",
+          },
+        ],
+        "unused",
+      ),
+    /verification/,
+  );
+  assert.throws(
+    () =>
+      p.selectSources(
+        [
+          {
+            name: "ubuntu.list",
+            text: "deb [trusted=yes] " + uri + " resolute main",
+          },
+        ],
+        "unused",
+      ),
+    /verification/,
+  );
+});

@@ -25,9 +25,9 @@ on:
         required: false
         default: ""
       platforms:
-        description: Platforms to run on, comma-separated.
+        description: Runner labels, comma-separated; select one macOS runner.
         required: false
-        default: ubuntu-latest,macos-latest,windows-latest
+        default: ubuntu-latest,macos-26-intel,windows-latest
       editor-ref:
         description: The lumine-code/lumine ref to build the editor from.
         required: false
@@ -66,6 +66,7 @@ jobs:
       packages: ${{ steps.plan.outputs.packages }}
       package-inputs: ${{ steps.plan.outputs.package-inputs }}
       platforms: ${{ steps.platforms.outputs.list }}
+      macos-platforms: ${{ steps.platforms.outputs.macos }}
       unresolved: ${{ steps.plan.outputs.unresolved }}
       editor-sha: ${{ steps.editor.outputs.sha }}
     steps:
@@ -90,19 +91,8 @@ jobs:
       - name: Select the platforms
         id: platforms
         env:
-          PLATFORMS: ${{ inputs.platforms || 'ubuntu-latest,macos-latest,windows-latest' }}
-        run: |
-          list=$(node -e '
-            const allowed = new Set(["ubuntu-latest", "macos-latest", "windows-latest"]);
-            const list = [...new Set(process.argv[1].split(",").map((value) => value.trim()).filter(Boolean))];
-            const invalid = list.filter((value) => !allowed.has(value));
-            if (list.length === 0 || invalid.length > 0) {
-              console.error(`Platforms must be a non-empty subset of ${[...allowed].join(", ")}.`);
-              process.exit(1);
-            }
-            console.log(JSON.stringify(list));
-          ' "$PLATFORMS")
-          echo "list=$list" >> "$GITHUB_OUTPUT"
+          PLATFORMS: ${{ inputs.platforms || '' }}
+        run: node scripts/select-platforms.js
       # Discovery reads the organization, so it needs a token for the repository
       # listing; the manifests and refs it reads afterwards cost no API quota.
       - name: Resolve every package in the organization
@@ -366,14 +356,14 @@ jobs:
   specs-macos:
     name: ${{ matrix.package }} (macOS)
     needs: [plan, editor]
-    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && contains(fromJSON(needs.plan.outputs.platforms), 'macos-latest') }}
+    if: ${{ !cancelled() && needs.plan.outputs.count != '0' && needs.plan.outputs.macos-platforms != '' && needs.plan.outputs.macos-platforms != '[]' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         package: ${{ fromJSON(needs.plan.outputs.packages) }}
-        os: [macos-latest]
+        os: ${{ fromJSON(needs.plan.outputs.macos-platforms) }}
     steps: *package-spec-steps
 
   specs-windows:

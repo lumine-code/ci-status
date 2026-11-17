@@ -21,6 +21,8 @@ The branch is a discovery selector: jobs fetch its recorded commit rather than r
 
 These receipts attest the primary package and editor commits. A package's `specPackages` peers are ordinary checkouts at `master`; their actual checkout commits are not recorded, so the runner does not attest a frozen dependency closure.
 
+Push and daily sweeps use `ubuntu-latest`, `macos-26-intel` and `windows-latest`. The standard Intel macOS 26 runner avoids the arm64 capacity queue; manual sweeps can select `macos-latest` for arm64. Select at most one macOS runner in the `platforms` input so logical macOS checks and result artifacts stay unique.
+
 Linux headless setup retains `xvfb`, `libsecret-1-0`, `fonts-noto-cjk` and normal recommended packages. Each source gets 90 seconds for authenticated metadata and 180 seconds for downloads; metadata or download failures on the configured source switch to official Ubuntu archive endpoints with the same signing configuration. Installation uses the authenticated cache without downloads, has a 180-second budget and is never retried. Commands have a further 10-second kill grace within a 15-minute setup step. Failure on both sources or during cached installation stops setup and retains an error result.
 
 After installing a package's dependencies, the runner executes its declared nonempty `pretest` script once with `npm run pretest`, before native rebuild and editor specs. A pretest failure records an error and stops that package's spec launch.
