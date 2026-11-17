@@ -472,16 +472,26 @@ test("the shared workflow uploads each platform/package result even after a fail
   const retryStart = workflow.indexOf(
     "      - name: Retry uploading the actual package and editor result\n",
   );
-  const end = workflow.indexOf("\n  specs-macos:", retryStart);
+  const finalWaitStart = workflow.indexOf(
+    "      - name: Wait before the final result upload\n",
+  );
+  const finalStart = workflow.indexOf(
+    "      - name: Upload the retained result after extended backoff\n",
+  );
+  const end = workflow.indexOf("\n  specs-macos-1:", retryStart);
   assert.ok(
     firstStart >= 0 &&
       firstStart < waitStart &&
       waitStart < retryStart &&
-      retryStart < end,
+      retryStart < finalWaitStart &&
+      finalWaitStart < finalStart &&
+      finalStart < end,
   );
   const first = workflow.slice(firstStart, waitStart);
   const wait = workflow.slice(waitStart, retryStart);
-  const retry = workflow.slice(retryStart, end);
+  const retry = workflow.slice(retryStart, finalWaitStart);
+  const finalWait = workflow.slice(finalWaitStart, finalStart);
+  const final = workflow.slice(finalStart, end);
   assert.match(first, /^        id: upload_result$/m);
   assert.match(first, /^        if: always\(\)$/m);
   assert.match(first, /^        continue-on-error: true$/m);
@@ -493,9 +503,22 @@ test("the shared workflow uploads each platform/package result even after a fail
     /^        run: node -e "setTimeout\(\(\) => \{\}, 10000\)"$/m,
   );
   assert.match(retry, retryCondition);
-  assert.doesNotMatch(retry, /continue-on-error:|^        run:/m);
-  assert.match(retry, /^          overwrite: true$/m);
-  for (const upload of [first, retry]) {
+  assert.match(retry, /^        id: retry_upload_result$/m);
+  assert.match(retry, /^        continue-on-error: true$/m);
+  const finalCondition =
+    /^        if: always\(\) && steps\.retry_upload_result\.outcome == 'failure'$/m;
+  assert.match(finalWait, finalCondition);
+  assert.match(
+    finalWait,
+    /^        run: node -e "setTimeout\(\(\) => \{\}, 90000\)"$/m,
+  );
+  assert.match(final, finalCondition);
+  assert.doesNotMatch(final, /continue-on-error:/);
+  for (const upload of [retry, final]) {
+    assert.match(upload, /^          overwrite: true$/m);
+  }
+  for (const upload of [first, retry, final]) {
+    assert.doesNotMatch(upload, /^        run:/m);
     assert.equal(
       (upload.match(/uses: actions\/upload-artifact@v7/g) || []).length,
       1,
@@ -516,7 +539,7 @@ test("the shared workflow uploads each platform/package result even after a fail
         .slice(firstStart, end)
         .match(/uses: actions\/upload-artifact@v7/g) || []
     ).length,
-    2,
+    3,
   );
   assert.equal(
     (workflow.match(/run: node scripts\/run-specs\.js /g) || []).length,
@@ -532,6 +555,6 @@ test("the shared workflow uploads each platform/package result even after a fail
   );
   assert.equal(
     (workflow.match(/steps: \*package-spec-steps/g) || []).length,
-    2,
+    5,
   );
 });

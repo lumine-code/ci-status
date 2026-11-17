@@ -4,10 +4,13 @@ const fs = require("node:fs");
 
 const DEFAULT_PLATFORMS = Object.freeze([
   "ubuntu-latest",
-  "macos-26-intel",
+  "macos-latest",
   "windows-latest",
 ]);
-const ALLOWED_PLATFORMS = Object.freeze([...DEFAULT_PLATFORMS, "macos-latest"]);
+const ALLOWED_PLATFORMS = Object.freeze([
+  ...DEFAULT_PLATFORMS,
+  "macos-26-intel",
+]);
 
 function selectPlatforms(input = DEFAULT_PLATFORMS.join(",")) {
   if (typeof input !== "string") throw new Error("Platforms must be a string.");

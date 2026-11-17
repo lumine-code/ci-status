@@ -8,10 +8,10 @@ const { spawnSync } = require("node:child_process");
 const { test } = require("node:test");
 const { DEFAULT_PLATFORMS, selectPlatforms } = require("./select-platforms");
 
-test("the full default sweep selects each OS once with the standard Intel macOS runner", () => {
+test("the full default sweep selects each OS once with the ARM macOS runner", () => {
   assert.deepEqual(selectPlatforms(), {
-    list: ["ubuntu-latest", "macos-26-intel", "windows-latest"],
-    macos: ["macos-26-intel"],
+    list: ["ubuntu-latest", "macos-latest", "windows-latest"],
+    macos: ["macos-latest"],
   });
 });
 
@@ -96,7 +96,7 @@ test("the actual CLI emits the default editor matrix and matching single-Mac mat
   assert.deepEqual(JSON.parse(actual.stdout), selectPlatforms());
   assert.equal(
     fs.readFileSync(output, "utf8"),
-    'list=["ubuntu-latest","macos-26-intel","windows-latest"]\nmacos=["macos-26-intel"]\n',
+    'list=["ubuntu-latest","macos-latest","windows-latest"]\nmacos=["macos-latest"]\n',
   );
 });
 
@@ -106,6 +106,15 @@ test("the actual CLI preserves an explicit ARM-only manual selection", (t) => {
   assert.equal(
     fs.readFileSync(output, "utf8"),
     'list=["macos-latest"]\nmacos=["macos-latest"]\n',
+  );
+});
+
+test("the actual CLI retains Intel macOS for an explicit manual diagnostic subset", (t) => {
+  const { actual, output } = execute(t, "macos-26-intel");
+  assert.equal(actual.status, 0, actual.stderr);
+  assert.equal(
+    fs.readFileSync(output, "utf8"),
+    'list=["macos-26-intel"]\nmacos=["macos-26-intel"]\n',
   );
 });
 
@@ -131,20 +140,21 @@ test("the actual workflow uses matching selected runner labels for editor and pa
   assert(
     workflow.includes("os: ${{ fromJSON(needs.plan.outputs.platforms) }}"),
   );
-  const sections = workflow.split("  specs-macos:\n");
-  assert.equal(sections.length, 2);
-  const macos = sections[1].split("  specs-windows:")[0];
-  assert(macos.includes("needs: [plan, editor]"));
-  assert(macos.includes("needs.plan.outputs.macos-platforms != ''"));
-  assert(macos.includes("needs.plan.outputs.macos-platforms != '[]'"));
-  assert(
-    macos.includes("os: ${{ fromJSON(needs.plan.outputs.macos-platforms) }}"),
-  );
-  assert(macos.includes("steps: *package-spec-steps"));
+  for (let index = 1; index <= 4; index++) {
+    const sections = workflow.split(`  specs-macos-${index}:\n`);
+    assert.equal(sections.length, 2);
+    const macos = sections[1].split(/^  [a-zA-Z0-9-]+:/m)[0];
+    assert(macos.includes("needs.plan.outputs.macos-platforms != ''"));
+    assert(macos.includes("needs.plan.outputs.macos-platforms != '[]'"));
+    assert(
+      macos.includes("os: ${{ fromJSON(needs.plan.outputs.macos-platforms) }}"),
+    );
+    assert(macos.includes("steps: *package-spec-steps"));
+  }
   const editor = workflow.split("  editor:\n")[1].split("  specs-linux:\n")[0];
   const packageSteps = workflow
     .split("steps: &package-spec-steps\n")[1]
-    .split("  specs-macos:\n")[0];
+    .split("  specs-macos-1:\n")[0];
   assert(editor.includes("name: lumine-editor-${{ matrix.os }}"));
   assert(packageSteps.includes("name: lumine-editor-${{ matrix.os }}"));
 });

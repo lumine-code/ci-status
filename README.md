@@ -21,7 +21,9 @@ The branch is a discovery selector: jobs fetch its recorded commit rather than r
 
 These receipts attest the primary package and editor commits. A package's `specPackages` peers are ordinary checkouts at `master`; their actual checkout commits are not recorded, so the runner does not attest a frozen dependency closure.
 
-Push and daily sweeps use `ubuntu-latest`, `macos-26-intel` and `windows-latest`. The standard Intel macOS 26 runner avoids the arm64 capacity queue; manual sweeps can select `macos-latest` for arm64. Select at most one macOS runner in the `platforms` input so logical macOS checks and result artifacts stay unique.
+Push and daily sweeps use `ubuntu-latest`, `macos-latest` and `windows-latest`. Full macOS sweeps use the standard arm64 runner, which supports the graphics contexts required by the 3D packages. `macos-26-intel` remains an explicit manual option for CPU-only diagnostic subsets. Select at most one macOS runner in the `platforms` input so logical macOS checks and result artifacts stay unique.
+
+macOS package checks run in four balanced waves, with at most five concurrent jobs per wave. Each later wave becomes eligible after the preceding wave finishes, and still runs after a test failure unless the workflow is cancelled. Every package retains its individual check, timeout and result artifact. This reduces hosted runner acquisition pressure without guaranteeing provider capacity or a particular queue-time limit.
 
 Linux headless setup retains `xvfb`, `libsecret-1-0`, `fonts-noto-cjk` and normal recommended packages. Each source gets 90 seconds for authenticated metadata and 180 seconds for downloads; metadata or download failures on the configured source switch to official Ubuntu archive endpoints with the same signing configuration. Installation uses the authenticated cache without downloads, has a 180-second budget and is never retried. Commands have a further 10-second kill grace within a 15-minute setup step. Failure on both sources or during cached installation stops setup and retains an error result.
 
