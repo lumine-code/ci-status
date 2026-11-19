@@ -272,6 +272,143 @@ test("every authenticated package name survives both download/install command pl
   for (const c of e.calls.slice(1))
     assert.deepEqual(c.args.slice(-3), [...p.PACKAGES]);
 });
+test("preparation downloads requested packages without installing and isolates mirror caches", () => {
+  const workspace = fs.mkdtempSync(
+    path.join(os.tmpdir(), "lumine-apt-preparation-test-"),
+  );
+  const prepared = p.prepareSources(files, mirrors, workspace);
+  const codes = [0, 124, 0, 0];
+  const calls = [];
+  const run = (args) => {
+    calls.push(args);
+    return { code: codes.shift() };
+  };
+  const archives = p.installHeadless(prepared, run, () => {}, {
+    prepare: true,
+  });
+  assert.equal(archives, path.join(workspace, "official-fallback", "archives"));
+  assert.equal(calls.length, 4);
+  for (const [index, layout] of prepared.entries()) {
+    const args = calls[index * 2 + 1];
+    assert(args.includes("--reinstall"));
+    assert(args.includes("--download-only"));
+    assert(
+      args.includes(
+        `Dir::Cache::archives=${path.join(path.dirname(layout.list), "archives")}`,
+      ),
+    );
+    assert(args.includes("APT::Get::AllowUnauthenticated=false"));
+    assert.deepEqual(args.slice(-3), [...p.PACKAGES]);
+  }
+  assert(calls.every((args) => !args.includes("--no-download")));
+});
+
+function makeBundle() {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), "lumine-apt-bundle-test-"),
+  );
+  const archives = path.join(root, "archives");
+  const directory = path.join(root, "bundle");
+  const image = {
+    image: "ubuntu26",
+    version: "first",
+    arch: "x64",
+    release: "26.04",
+  };
+  fs.mkdirSync(archives);
+  fs.mkdirSync(path.join(archives, "partial"));
+  fs.writeFileSync(path.join(archives, "lock"), "");
+  for (const name of p.PACKAGES)
+    fs.writeFileSync(path.join(archives, `${name}_1_amd64.deb`), name);
+  p.writeBundle(archives, directory, image);
+  return { directory, image };
+}
+
+test("same-release runners use verified local archives without repositories or downloads", () => {
+  const { directory, image } = makeBundle();
+  const calls = [];
+  assert.equal(
+    p.installBundle(
+      directory,
+      { ...image, version: "second" },
+      (args) => {
+        calls.push(args);
+        return { code: 0 };
+      },
+      () => {},
+    ),
+    true,
+  );
+  assert.equal(calls.length, 2);
+  assert(calls[0].includes("--simulate"));
+  assert(!calls[1].includes("--simulate"));
+  for (const args of calls) {
+    assert(args.includes("--no-download"));
+    assert(args.includes("Dir::Etc::sourcelist=/dev/null"));
+    assert(args.includes("APT::Get::AllowUnauthenticated=false"));
+    assert.deepEqual(
+      args.slice(-3),
+      [...p.PACKAGES]
+        .sort()
+        .map((name) => path.join(directory, `${name}_1_amd64.deb`)),
+    );
+  }
+});
+
+test("fallback occurs only before dpkg when the release or local dependency plan differs", () => {
+  const { directory, image } = makeBundle();
+  assert.equal(
+    p.installBundle(
+      directory,
+      { ...image, release: "24.04" },
+      () => assert.fail(),
+      () => {},
+    ),
+    false,
+  );
+  assert.equal(
+    p.installBundle(
+      directory,
+      image,
+      (args) => {
+        assert(args.includes("--simulate"));
+        return { code: 100 };
+      },
+      () => {},
+    ),
+    false,
+  );
+  assert.throws(
+    () =>
+      p.installBundle(
+        directory,
+        image,
+        (args) => ({
+          code: args.includes("--simulate") ? 0 : 100,
+        }),
+        () => {},
+      ),
+    /no installation retry/,
+  );
+});
+
+test("a changed archive aborts before any package-manager invocation", () => {
+  const { directory, image } = makeBundle();
+  fs.writeFileSync(
+    path.join(directory, "fonts-noto-cjk_1_amd64.deb"),
+    "changed",
+  );
+  assert.throws(
+    () =>
+      p.installBundle(
+        directory,
+        image,
+        () => assert.fail(),
+        () => {},
+      ),
+    /archive failed verification/,
+  );
+});
 test("GNU timeout runs as root around apt with TERM and finite KILL grace", () => {
   const [command, args] = p.commandFor(
     ["--download-only", "install", "-y", ...p.PACKAGES],

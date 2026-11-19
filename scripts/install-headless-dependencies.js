@@ -4,7 +4,8 @@ const fs = require("node:fs"),
   os = require("node:os"),
   path = require("node:path"),
   { pathToFileURL } = require("node:url"),
-  { spawnSync } = require("node:child_process");
+  { spawnSync } = require("node:child_process"),
+  { createHash } = require("node:crypto");
 const PACKAGES = Object.freeze(["xvfb", "libsecret-1-0", "fonts-noto-cjk"]);
 const BUDGETS = Object.freeze({
   update: 90,
@@ -13,6 +14,14 @@ const BUDGETS = Object.freeze({
   killGrace: 10,
 });
 const MIRROR_SOURCE = "mirror+file:/etc/apt/apt-mirrors.txt";
+const TRUST_OPTIONS = Object.freeze([
+  "-o",
+  "APT::Get::AllowUnauthenticated=false",
+  "-o",
+  "Acquire::AllowInsecureRepositories=false",
+  "-o",
+  "Acquire::AllowDowngradeToInsecureRepositories=false",
+]);
 const requireValue = (value, message) => {
   if (!value) throw new Error(message);
 };
@@ -231,12 +240,7 @@ function aptOptions(layout) {
     "DPkg::Lock::Timeout=60",
     "-o",
     "APT::Update::Error-Mode=any",
-    "-o",
-    "APT::Get::AllowUnauthenticated=false",
-    "-o",
-    "Acquire::AllowInsecureRepositories=false",
-    "-o",
-    "Acquire::AllowDowngradeToInsecureRepositories=false",
+    ...TRUST_OPTIONS,
     "-o",
     `Dir::Etc::sourcelist=${layout.list}`,
     "-o",
@@ -274,9 +278,21 @@ function runApt(args, budget) {
     });
   return { code: result.status ?? 1, error: result.error?.message };
 }
-function installHeadless(layouts, run = runApt, log = console.log) {
+function installHeadless(
+  layouts,
+  run = runApt,
+  log = console.log,
+  { prepare = false } = {},
+) {
   for (const layout of layouts) {
     const options = aptOptions(layout);
+    const archives = prepare
+      ? path.join(path.dirname(layout.list), "archives")
+      : null;
+    if (archives) {
+      fs.mkdirSync(archives, { mode: 0o755 });
+      options.push("-o", `Dir::Cache::archives=${archives}`);
+    }
     log(`APT metadata: ${layout.name}; wall budget ${BUDGETS.update}s`);
     const updated = run([...options, "update"], BUDGETS.update);
     if (updated.code !== 0) {
@@ -289,7 +305,14 @@ function installHeadless(layouts, run = runApt, log = console.log) {
     // after an entire authenticated download has completed successfully.
     log(`APT download: ${layout.name}; wall budget ${BUDGETS.download}s`);
     const fetched = run(
-      [...options, "--download-only", "install", "-y", ...PACKAGES],
+      [
+        ...options,
+        "--download-only",
+        ...(prepare ? ["--reinstall"] : []),
+        "install",
+        "-y",
+        ...PACKAGES,
+      ],
       BUDGETS.download,
     );
     if (fetched.code !== 0) {
@@ -298,6 +321,7 @@ function installHeadless(layouts, run = runApt, log = console.log) {
       );
       continue;
     }
+    if (archives) return archives;
     log(`APT cached install; wall budget ${BUDGETS.install}s`);
     const installed = run(
       [...options, "--no-download", "install", "-y", ...PACKAGES],
@@ -313,18 +337,162 @@ function installHeadless(layouts, run = runApt, log = console.log) {
     "APT download failed on configured and official fallback sources.",
   );
 }
+function prepareLayouts(workspace) {
+  const files = systemSources(),
+    mirrors = usesRunnerMirrorList(files)
+      ? fs.readFileSync("/etc/apt/apt-mirrors.txt", "utf8")
+      : "";
+  return prepareSources(files, mirrors, workspace);
+}
+function runnerImage() {
+  return {
+    image: process.env.ImageOS ?? null,
+    version: process.env.ImageVersion ?? null,
+    arch: process.arch,
+    release: fs.readFileSync("/etc/os-release", "utf8"),
+  };
+}
+const archiveName = (name) =>
+  /^[a-z0-9][a-z0-9.+-]*_[a-z0-9.+_~:%-]+\.deb$/i.test(name);
+const archiveHash = (file) =>
+  createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+
+function writeBundle(archives, directory, image) {
+  const names = fs
+    .readdirSync(archives, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && archiveName(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  requireValue(
+    PACKAGES.every((name) => names.some((file) => file.startsWith(`${name}_`))),
+    "Prepared APT archives are missing a headless-display package",
+  );
+  fs.mkdirSync(directory);
+  const files = names.map((name) => {
+    const target = path.join(directory, name);
+    fs.copyFileSync(path.join(archives, name), target);
+    return { name, sha256: archiveHash(target) };
+  });
+  fs.writeFileSync(
+    path.join(directory, "manifest.json"),
+    JSON.stringify({ image, files }),
+  );
+}
+
+function installBundle(directory, image, run = runApt, log = console.log) {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
+  );
+  if (
+    manifest.image?.arch !== image.arch ||
+    manifest.image?.release !== image.release
+  ) {
+    log(
+      "Prepared APT archives target another Ubuntu release or architecture. Using official sources.",
+    );
+    return false;
+  }
+  requireValue(
+    Array.isArray(manifest.files) && manifest.files.length > 0,
+    "Missing prepared APT archives",
+  );
+  const files = manifest.files.map(({ name, sha256 }) => {
+    requireValue(
+      typeof name === "string" && archiveName(name),
+      "Invalid prepared APT filename",
+    );
+    const file = path.resolve(directory, name);
+    requireValue(
+      fs.lstatSync(file).isFile() && archiveHash(file) === sha256,
+      `Prepared APT archive failed verification: ${name}`,
+    );
+    return file;
+  });
+  const names = files.map((file) => path.basename(file));
+  requireValue(
+    new Set(names).size === names.length &&
+      PACKAGES.every((name) =>
+        names.some((file) => file.startsWith(`${name}_`)),
+      ),
+    "Prepared APT manifest has duplicate archives or missing packages",
+  );
+  // The producing runner authenticated these bytes against signed indexes.
+  // Solve only from the local files and the consuming runner's installed state.
+  const options = [
+    ...TRUST_OPTIONS,
+    "-o",
+    "Dir::Etc::sourcelist=/dev/null",
+    "-o",
+    "Dir::Etc::sourceparts=-",
+    "-o",
+    "Dir::Cache::pkgcache=",
+    "-o",
+    "Dir::Cache::srcpkgcache=",
+    "-o",
+    "DPkg::Lock::Timeout=60",
+    "--no-download",
+  ];
+  const args = ["install", "-y", ...files];
+  const planned = run([...options, "--simulate", ...args], BUDGETS.update);
+  if (planned.code !== 0) {
+    log(
+      "::warning::Prepared archives cannot satisfy this runner's package state. Using official sources.",
+    );
+    return false;
+  }
+  log(
+    `Installing prepared APT archives with a ${BUDGETS.install}s wall budget.`,
+  );
+  const installed = run([...options, ...args], BUDGETS.install);
+  requireValue(
+    installed.code === 0,
+    "Prepared APT installation failed; no installation retry is attempted.",
+  );
+  return true;
+}
+
 function main() {
   requireValue(
     process.platform === "linux",
     "This dependency preparation runs only on Linux.",
   );
-  requireValue(process.argv.length === 2, "No arguments are accepted.");
-  const files = systemSources(),
-    mirrors = usesRunnerMirrorList(files)
-      ? fs.readFileSync("/etc/apt/apt-mirrors.txt", "utf8")
-      : "",
-    workspace = fs.mkdtempSync(path.join(os.tmpdir(), "lumine-apt-"));
-  installHeadless(prepareSources(files, mirrors, workspace));
+  const [mode, target, ...extra] = process.argv.slice(2);
+  requireValue(
+    !mode ||
+      (["--prepare", "--install-prepared"].includes(mode) &&
+        target &&
+        !extra.length),
+    "Use --prepare <directory> or --install-prepared <directory>.",
+  );
+  const directory = mode ? path.resolve(target) : null;
+  if (
+    mode === "--install-prepared" &&
+    installBundle(directory, runnerImage())
+  ) {
+    const installed = spawnSync(
+      "dpkg-query",
+      ["--show", "--showformat=${db:Status-Status}\n", ...PACKAGES],
+      { encoding: "utf8" },
+    );
+    const statuses = installed.stdout?.trim().split("\n");
+    requireValue(
+      installed.status === 0 &&
+        statuses?.length === PACKAGES.length &&
+        statuses.every((status) => status === "installed"),
+      "Prepared headless packages are not all installed",
+    );
+    return;
+  }
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "lumine-apt-"));
+  const layouts = prepareLayouts(workspace);
+  if (mode === "--prepare") {
+    const archives = installHeadless(layouts, runApt, console.log, {
+      prepare: true,
+    });
+    writeBundle(archives, directory, runnerImage());
+  } else {
+    installHeadless(layouts);
+  }
 }
 module.exports = {
   PACKAGES,
@@ -336,6 +504,8 @@ module.exports = {
   aptOptions,
   commandFor,
   installHeadless,
+  writeBundle,
+  installBundle,
 };
 if (require.main === module)
   try {

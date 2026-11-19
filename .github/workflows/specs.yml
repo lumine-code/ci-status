@@ -136,6 +136,10 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.symlinks true
       - uses: actions/checkout@v7
+        if: runner.os == 'Linux'
+        with:
+          path: ci-status-tools
+      - uses: actions/checkout@v7
         with:
           repository: lumine-code/lumine
           ref: ${{ needs.plan.outputs.editor-sha }}
@@ -145,6 +149,10 @@ jobs:
           node-version-file: lumine/.nvmrc
           cache: npm
           cache-dependency-path: lumine/package-lock.json
+      - name: Prepare Linux test dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        run: node ci-status-tools/scripts/install-headless-dependencies.js --prepare linux-headless
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -197,10 +205,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          inputs=(lumine plan.json)
+          if [ "$RUNNER_OS" = Linux ]; then inputs+=(linux-headless); fi
           if command -v zstd >/dev/null 2>&1; then
-            tar -cf - lumine plan.json | zstd -3 -T0 -o lumine-editor.tar.zst
+            tar -cf - "${inputs[@]}" | zstd -3 -T0 -o lumine-editor.tar.zst
           else
-            tar -czf lumine-editor.tar.gz lumine plan.json
+            tar -czf lumine-editor.tar.gz "${inputs[@]}"
           fi
       - uses: actions/upload-artifact@v7
         with:
@@ -257,10 +267,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - name: Install headless-display dependencies
-        if: runner.os == 'Linux'
-        timeout-minutes: 15
-        run: node scripts/install-headless-dependencies.js
       - name: Use HTTPS for GitHub git dependencies
         shell: bash
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
@@ -277,6 +283,10 @@ jobs:
             tar -xzf lumine-editor.tar.gz
           fi
           rm -f lumine-editor.tar.*
+      - name: Install headless-display dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        run: node scripts/install-headless-dependencies.js --install-prepared linux-headless
       - name: Run ${{ matrix.package }} specs
         id: package_specs
         shell: bash
