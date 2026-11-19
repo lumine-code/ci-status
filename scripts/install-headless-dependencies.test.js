@@ -343,8 +343,12 @@ test("same-release runners use verified local archives without repositories or d
   assert(calls[0].includes("--simulate"));
   assert(!calls[1].includes("--simulate"));
   for (const args of calls) {
-    assert(args.includes("--no-download"));
-    assert(args.includes("Dir::Etc::sourcelist=/dev/null"));
+    assert(!args.includes("--no-download"));
+    const option = (key) =>
+      args.find((arg) => arg.startsWith(`${key}=`)).slice(key.length + 1);
+    assert.equal(fs.readFileSync(option("Dir::Etc::sourcelist"), "utf8"), "");
+    assert.deepEqual(fs.readdirSync(option("Dir::Etc::sourceparts")), []);
+    assert.deepEqual(fs.readdirSync(option("Dir::State::lists")), []);
     assert(args.includes("APT::Get::AllowUnauthenticated=false"));
     assert.deepEqual(
       args.slice(-3),

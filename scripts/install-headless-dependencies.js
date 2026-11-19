@@ -417,20 +417,31 @@ function installBundle(directory, image, run = runApt, log = console.log) {
     "Prepared APT manifest has duplicate archives or missing packages",
   );
   // The producing runner authenticated these bytes against signed indexes.
-  // Solve only from the local files and the consuming runner's installed state.
+  // Use empty sources so APT can only acquire the verified local files. Its
+  // local acquire handler supplies absolute archive paths to dpkg.
+  const workspace = fs.mkdtempSync(
+    path.join(os.tmpdir(), "lumine-apt-offline-"),
+  );
+  const list = path.join(workspace, "sources.list");
+  const parts = path.join(workspace, "sources.list.d");
+  const lists = path.join(workspace, "lists");
+  fs.writeFileSync(list, "");
+  fs.mkdirSync(parts);
+  fs.mkdirSync(lists);
   const options = [
     ...TRUST_OPTIONS,
     "-o",
-    "Dir::Etc::sourcelist=/dev/null",
+    `Dir::Etc::sourcelist=${list}`,
     "-o",
-    "Dir::Etc::sourceparts=-",
+    `Dir::Etc::sourceparts=${parts}`,
+    "-o",
+    `Dir::State::lists=${lists}`,
     "-o",
     "Dir::Cache::pkgcache=",
     "-o",
     "Dir::Cache::srcpkgcache=",
     "-o",
     "DPkg::Lock::Timeout=60",
-    "--no-download",
   ];
   const args = ["install", "-y", ...files];
   const planned = run([...options, "--simulate", ...args], BUDGETS.update);
